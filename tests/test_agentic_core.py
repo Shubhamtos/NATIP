@@ -81,6 +81,8 @@ def test_deterministic_planner_runs_only_when_explicitly_selected() -> None:
     assert "technical_analysis" in executed
     assert "fundamental_analysis" in executed
     assert "risk_analysis" in executed
+    assert response.result["final_tool"] == "risk_analysis"
+    assert response.result["final_output"]["risk"] == "checked"
 
 
 def test_llm_planner_executes_only_model_selected_allowed_tools() -> None:
@@ -103,6 +105,7 @@ def test_llm_planner_executes_only_model_selected_allowed_tools() -> None:
         "risk_analysis",
     ]
     assert all(item.success for item in response.tool_executions)
+    assert response.result["final_tool"] == "risk_analysis"
 
 
 def test_llm_planner_fails_closed_for_unknown_tool_without_deterministic_fallback() -> None:
@@ -116,6 +119,32 @@ def test_llm_planner_fails_closed_for_unknown_tool_without_deterministic_fallbac
         asyncio.run(
             _build_gateway(planner).run(
                 AgentRunRequest(query="Analyze RELIANCE stock", symbol="RELIANCE")
+            )
+        )
+
+
+def test_llm_analysis_intent_requires_consensus_when_available() -> None:
+    planner = LLMAgenticPlanner(
+        client=FakePlannerClient(
+            '{"steps":['
+            '{"tool":"get_market_data","reason":"Fetch data","arguments":{}},'
+            '{"tool":"technical_analysis","reason":"Analyze trend","arguments":{}},'
+            '{"tool":"risk_analysis","reason":"Check risk","arguments":{}}'
+            ']}'
+        )
+    )
+    available_tools = {
+        "get_market_data",
+        "technical_analysis",
+        "risk_analysis",
+        "stock_consensus",
+    }
+
+    with pytest.raises(ValueError, match="requires stock_consensus"):
+        asyncio.run(
+            planner.create_plan_async(
+                AgentRunRequest(query="Analyze RELIANCE for a positional trade", symbol="RELIANCE"),
+                available_tools,
             )
         )
 
@@ -171,6 +200,8 @@ def test_market_data_is_compact_externally_but_full_in_shared_context() -> None:
         "bar_count_seen": 2,
         "saw_large_profile_field": True,
     }
+    assert response.result["final_tool"] == "technical_analysis"
+    assert response.result["final_output"]["bar_count_seen"] == 2
 
 
 def test_tool_registry_rejects_duplicate_names() -> None:
