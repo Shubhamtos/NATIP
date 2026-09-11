@@ -89,6 +89,9 @@ class AgenticOrchestrator:
             }
             try:
                 output = await tool.handler(**arguments)
+                # Keep the full tool payload only inside the workflow so later
+                # agents can use all candles/profile fields. External responses
+                # receive the compact representation below.
                 shared_context["outputs"][step.tool] = output
                 execution = ToolExecution(
                     tool=step.tool,
@@ -109,11 +112,29 @@ class AgenticOrchestrator:
         }
         status = "completed" if critic_result.sufficient else ("partial" if successful_outputs else "failed")
 
+        final_tool: str | None = None
+        final_output: dict[str, Any] = {}
+        if "stock_consensus" in successful_outputs:
+            final_tool = "stock_consensus"
+            final_output = successful_outputs[final_tool]
+        else:
+            # Always expose a primary result to UI/API callers, even when the
+            # LLM intentionally selected a workflow that does not end in consensus.
+            for item in reversed(executions):
+                if item.success:
+                    final_tool = item.tool
+                    final_output = item.output
+                    break
+
         return AgentRunResponse(
             status=status,
             query=request.query,
             plan=plan,
             tool_executions=executions,
             critic=critic_result,
-            result={"tool_outputs": successful_outputs},
+            result={
+                "final_tool": final_tool,
+                "final_output": final_output,
+                "tool_outputs": successful_outputs,
+            },
         )
