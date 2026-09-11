@@ -1,8 +1,9 @@
 """Optional LLM-driven planner for NATIP agentic workflows.
 
 The planner is constrained to NATIP's explicit tool allow-list. If the model
-returns invalid JSON, unknown tools, or otherwise unusable output, NATIP falls
-back to the deterministic planner rather than failing the request.
+returns invalid JSON, unknown tools, unsafe ordering, or otherwise unusable
+output, NATIP falls back to the deterministic planner rather than failing the
+request.
 """
 
 from __future__ import annotations
@@ -59,6 +60,7 @@ class LLMAgenticPlanner(AgenticPlanner):
         try:
             raw = await self.client.generate(prompt)
             plan = self._parse_plan(raw, request=request, available_tools=available_tools)
+            self._validate_dependencies(plan, available_tools=available_tools)
         except Exception:
             return self.fallback.create_plan(request, available_tools)
         return plan or self.fallback.create_plan(request, available_tools)
@@ -135,3 +137,38 @@ Metadata: {json.dumps(request.metadata, default=str)}
                 )
             )
         return steps
+
+    @staticmethod
+    def _validate_dependencies(
+        steps: list[PlanStep],
+        *,
+        available_tools: set[str],
+    ) -> None:
+        """Reject plans that violate NATIP's required execution dependencies."""
+
+        names = [step.tool for step in steps]
+        analysis_tools = {
+            "technical_analysis",
+            "fundamental_analysis",
+            "valuation_analysis",
+            "sector_analysis",
+            "macro_analysis",
+            "sentiment_analysis",
+            "risk_analysis",
+        }
+        if analysis_tools.intersection(names) and "get_market_data" in available_tools:
+            if "get_market_data" not in names:
+                raise ValueError("single-stock analysis requires get_market_data")
+            market_index = names.index("get_market_data")
+            if any(names.index(tool) < market_index for tool in analysis_tools.intersection(names)):
+                raise ValueError("get_market_data must precede analysis tools")
+
+        if "stock_consensus" in names:
+            consensus_index = names.index("stock_consensus")
+            if consensus_index != len(names) - 1:
+                raise ValueError("stock_consensus must be the final step")
+            if "risk_analysis" in available_tools:
+                if "risk_analysis" not in names:
+                    raise ValueError("stock_consensus requires risk_analysis")
+                if names.index("risk_analysis") > consensus_index:
+                    raise ValueError("risk_analysis must precede stock_consensus")
