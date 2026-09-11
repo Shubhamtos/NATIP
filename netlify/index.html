@@ -84,6 +84,18 @@
         margin-top: 30px;
       }
 
+      .notice {
+        margin-top: 18px;
+        max-width: 720px;
+        padding: 14px 16px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #f9fcfb;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
       a {
         color: inherit;
       }
@@ -151,7 +163,12 @@
 
         <div class="actions">
           <a class="button primary" href="https://natip.streamlit.app">Open Streamlit App</a>
-          <a class="button" href="https://github.com/">View GitHub Repository</a>
+          <a class="button" href="https://github.com/Shubhamtos/NATIP">View GitHub Repository</a>
+        </div>
+
+        <div class="notice">
+          Netlify hosts this public launcher. The interactive Python dashboard runs on
+          Streamlit Cloud or a local tunnel because Streamlit needs a live Python server.
         </div>
 
         <div class="grid">
@@ -176,4 +193,3 @@
     </main>
   </body>
 </html>
-
