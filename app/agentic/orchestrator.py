@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 from app.agentic.critic import AgenticCritic
@@ -25,7 +26,13 @@ class AgenticOrchestrator:
         self.critic = critic or AgenticCritic()
 
     async def run(self, request: AgentRunRequest) -> AgentRunResponse:
-        plan = self.planner.create_plan(request, set(self.registry.names()))
+        available_tools = set(self.registry.names())
+        async_planner = getattr(self.planner, "create_plan_async", None)
+        if async_planner is not None and inspect.iscoroutinefunction(async_planner):
+            plan = await async_planner(request, available_tools)
+        else:
+            plan = self.planner.create_plan(request, available_tools)
+
         executions: list[ToolExecution] = []
         shared_context: dict[str, Any] = {
             "query": request.query,
