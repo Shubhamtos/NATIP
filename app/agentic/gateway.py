@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from app.agentic.llm_planner import GeminiPlannerTextClient, LLMAgenticPlanner
+from app.agentic.gemini_text_client import GeminiTextClient
+from app.agentic.llm_planner import LLMAgenticPlanner
 from app.agentic.orchestrator import AgenticOrchestrator
 from app.agentic.schemas import AgentRunRequest, AgentRunResponse
 from app.agentic.tool_registry import build_default_tool_registry
 from app.core.config import get_settings
-from app.decision.ai_reasoning.gemini import GeminiReasoningClient
 
 
 class AgenticGateway:
@@ -37,11 +37,9 @@ def build_agentic_gateway() -> AgenticGateway:
         raise RuntimeError("NATIP_GEMINI_API_KEY is required for agentic mode")
 
     planner = LLMAgenticPlanner(
-        client=GeminiPlannerTextClient(
-            GeminiReasoningClient(
-                api_key=api_key,
-                model=settings.gemini_model,
-            )
+        client=GeminiTextClient(
+            api_key=api_key,
+            model=settings.gemini_model,
         )
     )
     return AgenticGateway(
