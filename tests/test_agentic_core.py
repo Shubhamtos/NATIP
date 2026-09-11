@@ -9,6 +9,7 @@ import pytest
 from app.agentic import AgentRunRequest, AgenticGateway, AgenticOrchestrator
 from app.agentic.llm_planner import LLMAgenticPlanner
 from app.agentic.planner import AgenticPlanner
+from app.agentic.schemas import PlanStep
 from app.agentic.tool_registry import ToolRegistry
 
 
@@ -31,6 +32,14 @@ class FakePlannerClient:
     async def generate(self, prompt: str) -> str:
         assert "allow-list" in prompt
         return self.text
+
+
+class FixedPlanner:
+    def __init__(self, steps: list[PlanStep]) -> None:
+        self.steps = steps
+
+    def create_plan(self, request: AgentRunRequest, available_tools: set[str]) -> list[PlanStep]:
+        return self.steps
 
 
 def _build_gateway(planner) -> AgenticGateway:
@@ -109,6 +118,59 @@ def test_llm_planner_fails_closed_for_unknown_tool_without_deterministic_fallbac
                 AgentRunRequest(query="Analyze RELIANCE stock", symbol="RELIANCE")
             )
         )
+
+
+def test_market_data_is_compact_externally_but_full_in_shared_context() -> None:
+    async def market_data(**kwargs):
+        return {
+            "symbol": "RELIANCE",
+            "quote": {"last_price": 2500},
+            "sector": "Energy",
+            "profile": {
+                "shortName": "Reliance Industries",
+                "industry": "Oil & Gas",
+                "marketCap": 100,
+                "website": "https://example.test",
+                "longBusinessSummary": "very large payload",
+            },
+            "bars": [
+                {"timestamp": "2026-01-01", "close": 2400},
+                {"timestamp": "2026-01-02", "close": 2500},
+            ],
+            "macro_context": [],
+        }
+
+    async def downstream(**kwargs):
+        full_market = kwargs["context"]["outputs"]["get_market_data"]
+        return {
+            "bar_count_seen": len(full_market["bars"]),
+            "saw_large_profile_field": "longBusinessSummary" in full_market["profile"],
+        }
+
+    registry = ToolRegistry()
+    registry.register(name="get_market_data", description="Market", handler=market_data)
+    registry.register(name="technical_analysis", description="Technical", handler=downstream)
+    planner = FixedPlanner(
+        [
+            PlanStep(tool="get_market_data", reason="Fetch data"),
+            PlanStep(tool="technical_analysis", reason="Use full data"),
+        ]
+    )
+    response = asyncio.run(
+        AgenticGateway(AgenticOrchestrator(registry=registry, planner=planner)).run(
+            AgentRunRequest(query="Analyze RELIANCE", symbol="RELIANCE")
+        )
+    )
+
+    market_output = response.result["tool_outputs"]["get_market_data"]
+    assert "bars" not in market_output
+    assert market_output["history"]["bar_count"] == 2
+    assert market_output["profile"]["shortName"] == "Reliance Industries"
+    assert "longBusinessSummary" not in market_output["profile"]
+    assert response.result["tool_outputs"]["technical_analysis"] == {
+        "bar_count_seen": 2,
+        "saw_large_profile_field": True,
+    }
 
 
 def test_tool_registry_rejects_duplicate_names() -> None:
