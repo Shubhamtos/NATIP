@@ -6,6 +6,8 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 
+from app.agentic.gateway import AgenticGateway, build_default_gateway
+from app.agentic.schemas import AgentRunRequest, AgentRunResponse
 from app.agents import AgentContext
 from app.evidence import EvidenceRecord
 from app.providers.market import HistoricalDataRequest
@@ -13,17 +15,20 @@ from app.runtime import AppRuntime, runtime
 from app.intelligence.raw_material.service import RawMaterialImpactService
 from app.models import CompanyRawMaterialMapping
 
-app = FastAPI(title="NATIP", version="0.1.0")
+app = FastAPI(title="NATIP", version="0.2.0")
+_agentic_gateway = build_default_gateway()
 
 
 def get_runtime() -> AppRuntime:
-    """Return application runtime dependencies.
-
-    Returns:
-        Runtime dependency container.
-    """
+    """Return application runtime dependencies."""
 
     return runtime
+
+
+def get_agentic_gateway() -> AgenticGateway:
+    """Return the NATIP agentic gateway."""
+
+    return _agentic_gateway
 
 
 def get_raw_material_service() -> RawMaterialImpactService:
@@ -41,14 +46,7 @@ def require_raw_material_admin(x_natip_role: str | None = Header(default=None)) 
 
 @app.get("/health")
 async def health(runtime_dependency: Annotated[AppRuntime, Depends(get_runtime)]) -> dict[str, str]:
-    """Return application health.
-
-    Args:
-        runtime_dependency: Injected runtime dependency.
-
-    Returns:
-        Health response.
-    """
+    """Return application health."""
 
     return {
         "status": "ok",
@@ -57,20 +55,22 @@ async def health(runtime_dependency: Annotated[AppRuntime, Depends(get_runtime)]
     }
 
 
+@app.post("/agent/run", response_model=AgentRunResponse)
+async def run_agentic_request(
+    request: AgentRunRequest,
+    gateway: Annotated[AgenticGateway, Depends(get_agentic_gateway)],
+) -> AgentRunResponse:
+    """Execute one controlled NATIP agentic workflow."""
+
+    return await gateway.run(request)
+
+
 @app.get("/market/quote/{symbol}")
 async def get_quote(
     symbol: str,
     runtime_dependency: Annotated[AppRuntime, Depends(get_runtime)],
 ) -> dict[str, object]:
-    """Fetch a quote, normalize it, and store evidence.
-
-    Args:
-        symbol: Stock symbol, for example ``RELIANCE`` or ``RELIANCE.NS``.
-        runtime_dependency: Injected runtime dependency.
-
-    Returns:
-        Agent execution output.
-    """
+    """Fetch a quote, normalize it, and store evidence."""
 
     result = await runtime_dependency.market_agent.execute(
         AgentContext(request_id=str(uuid4()), payload={"symbols": [symbol]})
@@ -85,17 +85,7 @@ async def get_history(
     days: Annotated[int, Query(ge=1, le=3650)] = 30,
     interval: str = "1d",
 ) -> dict[str, object]:
-    """Fetch historical OHLC data, normalize it, and store evidence.
-
-    Args:
-        symbol: Stock symbol, for example ``INFY`` or ``INFY.NS``.
-        runtime_dependency: Injected runtime dependency.
-        days: Number of calendar days to request.
-        interval: Yahoo Finance interval.
-
-    Returns:
-        Agent execution output.
-    """
+    """Fetch historical OHLC data, normalize it, and store evidence."""
 
     end = datetime.now(UTC)
     start = end - timedelta(days=days)
@@ -113,14 +103,7 @@ async def get_history(
 async def get_market_status(
     runtime_dependency: Annotated[AppRuntime, Depends(get_runtime)],
 ) -> dict[str, object]:
-    """Return normalized market status.
-
-    Args:
-        runtime_dependency: Injected runtime dependency.
-
-    Returns:
-        Market status response.
-    """
+    """Return normalized market status."""
 
     status = await runtime_dependency.market_provider.get_market_status()
     return {"success": True, "data": status.model_dump(mode="json")}
@@ -132,16 +115,7 @@ async def list_evidence(
     symbol: str | None = None,
     agent: str | None = None,
 ) -> dict[str, list[dict[str, object]]]:
-    """List stored evidence records.
-
-    Args:
-        runtime_dependency: Injected runtime dependency.
-        symbol: Optional symbol filter.
-        agent: Optional agent filter.
-
-    Returns:
-        Stored evidence records.
-    """
+    """List stored evidence records."""
 
     records: list[EvidenceRecord] = await runtime_dependency.evidence_store.search(
         symbol=symbol,
