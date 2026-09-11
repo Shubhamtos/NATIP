@@ -10,28 +10,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
 from typing import Protocol
 
 from app.agentic.schemas import AgentRunRequest, PlanStep
-from app.decision.ai_reasoning.gemini import GeminiReasoningClient
 
 
 class PlannerTextClient(Protocol):
-    """Minimal text-generation contract required by the LLM planner."""
+    """Minimal public text-generation contract required by the LLM planner."""
 
     async def generate(self, prompt: str) -> str:
         """Return model-generated text for a planning prompt."""
-
-
-@dataclass(slots=True)
-class GeminiPlannerTextClient:
-    """Adapter from NATIP's existing Gemini client to the planner contract."""
-
-    client: GeminiReasoningClient
-
-    async def generate(self, prompt: str) -> str:
-        return await asyncio.to_thread(self.client._generate_text, prompt)
 
 
 class LLMAgenticPlanner:
