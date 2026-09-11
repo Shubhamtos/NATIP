@@ -1,11 +1,14 @@
-"""Tests for the first NATIP agentic orchestration layer."""
+"""Tests for NATIP deterministic and agentic planning kept as separate paths."""
 
 from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from app.agentic import AgentRunRequest, AgenticGateway, AgenticOrchestrator
 from app.agentic.llm_planner import LLMAgenticPlanner
+from app.agentic.planner import AgenticPlanner
 from app.agentic.tool_registry import ToolRegistry
 
 
@@ -30,7 +33,7 @@ class FakePlannerClient:
         return self.text
 
 
-def _build_gateway(planner=None) -> AgenticGateway:
+def _build_gateway(planner) -> AgenticGateway:
     registry = ToolRegistry()
     registry.register(
         name="technical_analysis",
@@ -50,8 +53,8 @@ def _build_gateway(planner=None) -> AgenticGateway:
     return AgenticGateway(AgenticOrchestrator(registry=registry, planner=planner))
 
 
-def test_agentic_gateway_runs_registered_tools() -> None:
-    gateway = _build_gateway()
+def test_deterministic_planner_runs_only_when_explicitly_selected() -> None:
+    gateway = _build_gateway(AgenticPlanner())
     response = asyncio.run(
         gateway.run(
             AgentRunRequest(
@@ -93,32 +96,24 @@ def test_llm_planner_executes_only_model_selected_allowed_tools() -> None:
     assert all(item.success for item in response.tool_executions)
 
 
-def test_llm_planner_falls_back_when_model_selects_unknown_tool() -> None:
+def test_llm_planner_fails_closed_for_unknown_tool_without_deterministic_fallback() -> None:
     planner = LLMAgenticPlanner(
         client=FakePlannerClient(
             '{"steps":[{"tool":"run_arbitrary_python","reason":"unsafe","arguments":{}}]}'
         )
     )
-    response = asyncio.run(
-        _build_gateway(planner).run(
-            AgentRunRequest(query="Analyze RELIANCE stock", symbol="RELIANCE")
-        )
-    )
 
-    executed = {item.tool for item in response.tool_executions}
-    assert "run_arbitrary_python" not in executed
-    assert "technical_analysis" in executed
-    assert "fundamental_analysis" in executed
-    assert "risk_analysis" in executed
+    with pytest.raises(ValueError, match="unknown NATIP tool"):
+        asyncio.run(
+            _build_gateway(planner).run(
+                AgentRunRequest(query="Analyze RELIANCE stock", symbol="RELIANCE")
+            )
+        )
 
 
 def test_tool_registry_rejects_duplicate_names() -> None:
     registry = ToolRegistry()
     registry.register(name="risk_analysis", description="Risk", handler=_risk_analysis)
 
-    try:
+    with pytest.raises(ValueError, match="already registered"):
         registry.register(name="risk_analysis", description="Risk again", handler=_risk_analysis)
-    except ValueError as exc:
-        assert "already registered" in str(exc)
-    else:
-        raise AssertionError("duplicate tool registration should fail")
