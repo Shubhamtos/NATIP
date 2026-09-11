@@ -1,0 +1,2 @@
+"""Calendar intelligence package."""
+

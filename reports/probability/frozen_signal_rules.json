@@ -1,0 +1,36 @@
+{
+  "rules_version": "natip-clean-signals-v1.0",
+  "config_hash": "11edc1f63c08f8b20d0448c34d44c201f6088caca0898de4576bf6f47a60b4df",
+  "buy": {
+    "rule_id": "FROZEN_BUY_PRUNED_TOP_1PCT_AND_BINARY_SIGMOID_TOP_1PCT",
+    "conditions": [
+      "Pruned Advanced P_Outperform daily percentile >= 0.99",
+      "Binary XGBoost BUY sigmoid probability daily percentile >= 0.99"
+    ],
+    "validation_evidence": {
+      "count": 775,
+      "precision": 0.45806451612903226,
+      "average_20d_excess_return": 0.038180026358291624,
+      "median_20d_excess_return": 0.0406920111292454,
+      "non_overlapping_average_excess_return": 0.050193654816914915
+    }
+  },
+  "accumulate": {
+    "rule_id": "FROZEN_ACCUMULATE_PRUNED_TOP_20PCT_BINARY_SIGMOID_ABOVE_50TH_EX_BUY",
+    "conditions": [
+      "Pruned Advanced P_Outperform daily percentile >= 0.80",
+      "Binary XGBoost BUY sigmoid probability daily percentile >= 0.50",
+      "Exclude observations satisfying BUY rule"
+    ],
+    "validation_evidence": {
+      "average_20d_excess_return": 0.01485871206340852,
+      "median_20d_excess_return": 0.0064866315477856
+    }
+  },
+  "sell": {
+    "status": "SELL_RULE_NOT_YET_VALIDATED",
+    "live_rule": null
+  },
+  "threshold_freeze_policy": "Do not tune BUY or ACCUMULATE from final-test results.",
+  "rules_hash": "cee5662fb707f4eb2bcbf9fdcab19555a8e80f2185468c8f2bd76e64035e2c27"
+}

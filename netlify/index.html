@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NATIP</title>
+    <meta
+      name="description"
+      content="NATIP: NSE Agentic Trading Intelligence Platform. Research-only decision support."
+    />
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f8f7;
+        --ink: #102421;
+        --muted: #53645f;
+        --line: #dce6e2;
+        --brand: #00a779;
+        --brand-dark: #00795b;
+        --card: #ffffff;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+      }
+
+      main {
+        width: min(960px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 72px 0 48px;
+      }
+
+      .shell {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: clamp(24px, 5vw, 52px);
+        box-shadow: 0 20px 60px rgba(16, 36, 33, 0.08);
+      }
+
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 800;
+        letter-spacing: 0;
+        color: var(--brand-dark);
+      }
+
+      .mark {
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+        background: var(--brand);
+      }
+
+      h1 {
+        margin: 28px 0 14px;
+        font-size: clamp(36px, 7vw, 72px);
+        line-height: 0.98;
+        letter-spacing: 0;
+      }
+
+      p {
+        max-width: 720px;
+        color: var(--muted);
+        font-size: 18px;
+        line-height: 1.6;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 30px;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 44px;
+        padding: 0 18px;
+        border-radius: 6px;
+        border: 1px solid var(--line);
+        text-decoration: none;
+        font-weight: 700;
+      }
+
+      .primary {
+        background: var(--brand);
+        border-color: var(--brand);
+        color: white;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+        margin-top: 36px;
+      }
+
+      .item {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 16px;
+        min-height: 108px;
+      }
+
+      .item strong {
+        display: block;
+        margin-bottom: 8px;
+      }
+
+      .item span,
+      footer {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      footer {
+        margin-top: 24px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="shell">
+        <div class="brand"><span class="mark"></span><span>NATIP</span></div>
+        <h1>NSE trading intelligence, research only.</h1>
+        <p>
+          NATIP is a local-first stock research dashboard with frozen ML signals,
+          sector rotation, technical scans, and evidence views. The full Streamlit
+          application runs on a Python server; this Netlify page is the lightweight
+          public launcher.
+        </p>
+
+        <div class="actions">
+          <a class="button primary" href="https://natip.streamlit.app">Open Streamlit App</a>
+          <a class="button" href="https://github.com/">View GitHub Repository</a>
+        </div>
+
+        <div class="grid">
+          <div class="item">
+            <strong>Production Signals</strong>
+            <span>Frozen model artifacts and rules are preserved separately from research experiments.</span>
+          </div>
+          <div class="item">
+            <strong>Local First</strong>
+            <span>Heavy cache rebuilds, large scans, and data refresh jobs should run locally.</span>
+          </div>
+          <div class="item">
+            <strong>No Orders</strong>
+            <span>This deployment is for research and decision support only. It does not execute trades.</span>
+          </div>
+        </div>
+
+        <footer>
+          Output is for research and decision support only and does not guarantee returns.
+        </footer>
+      </section>
+    </main>
+  </body>
+</html>
+

@@ -1,0 +1,41 @@
+{
+  "rules_version": "natip-tuned-binary77-confidence-rules-v1.0",
+  "config_hash": "1fda267651c53a58c9e1f9857c4992fd2c98217ede461d0f77c785f637adb2c1",
+  "buy": {
+    "rule_id": "CURRENT_BUY_XGB26_TOP_1PCT_AND_CURRENT_BINARY77_TOP_0P5PCT",
+    "changed_by_tuned_binary": false,
+    "primary_classifier_percentile_min": 0.99,
+    "current_binary77_percentile_min": 0.995
+  },
+  "tuned_binary77_confidence": {
+    "role": "confidence_upgrader_only",
+    "must_not_create_buy": true,
+    "confirmation_percentile_min": 0.995,
+    "if_current_buy_and_tuned_confirms": {
+      "recommendation": "BUY",
+      "confidence": "HIGH"
+    },
+    "if_current_buy_and_tuned_does_not_confirm": {
+      "recommendation": "BUY",
+      "confidence": "MEDIUM"
+    },
+    "if_tuned_qualifies_but_current_buy_fails": {
+      "recommendation": "unchanged_non_buy",
+      "tuned_status": "RESEARCH_ONLY_TUNED_SIGNAL"
+    },
+    "validation_evidence": {
+      "signals": 153,
+      "precision": 0.6732,
+      "average_excess_return": 0.0797,
+      "median_excess_return": 0.0824,
+      "nifty_win_rate": 0.8693,
+      "bootstrap_precision_lift_ci": [
+        0.0952,
+        0.2215
+      ],
+      "source_decision": "KEEP_CURRENT_V2_RESEARCH_CANDIDATE_UNTIL_STABILITY_IMPROVES"
+    }
+  },
+  "artifact_sha256": "7965b4c4c0b100fb3df079531be2fcd30360e0ec66e3c1a2a5a8fc66bad37350",
+  "rules_hash": "5484990e34c50a566a0b1f5cdafe546636eee5c77b118cf6bff13ab45397b798"
+}

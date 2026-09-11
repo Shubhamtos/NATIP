@@ -1,0 +1,32 @@
+{
+  "rules_version": "natip-v2-buy-shadow-rules-v1.0",
+  "config_hash": "385512f57f415bd9a8171d62952c3110d5648412b1905a61814ca50fda75772b",
+  "buy": {
+    "rule_id": "V2_BUY_55_TOP_1PCT_AND_BINARY_77_TOP_0P5PCT",
+    "official_production": false,
+    "shadow_only": true,
+    "conditions": [
+      "55-feature classifier P_Outperform same-date percentile >= 0.99",
+      "77-feature Binary BUY sigmoid probability same-date percentile >= 0.995"
+    ],
+    "classifier_percentile_min": 0.99,
+    "binary_buy_percentile_min": 0.995,
+    "validation_evidence": {
+      "signals": 465,
+      "precision": 0.503226,
+      "average_20d_excess_return": 0.051657,
+      "median_20d_excess_return": 0.05097,
+      "nifty_win_rate": 0.690323,
+      "folds_positive": true,
+      "years_positive": true,
+      "robustness_classification": "PROMISING"
+    }
+  },
+  "ranker": {
+    "status": "diagnostic_only",
+    "mandatory_for_buy": false
+  },
+  "freeze_policy": "Do not tune V2 thresholds from live/shadow results.",
+  "artifact_sha256": "cc1eb0278208d434cf2dce54360cfbd8514117d19c589eb4d5f5e3726f221a55",
+  "rules_hash": "ff6ecab96e72262a7495b776a1cd7f0714289c015e057b2d12373289837df184"
+}

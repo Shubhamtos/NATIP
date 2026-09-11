@@ -1,0 +1,9 @@
+raw_material_id,name,category,benchmark,yahoo_symbol,original_currency,unit,is_international,related_sectors,source,source_url
+brent_crude,Brent Crude,Energy,ICE Brent Futures,BZ=F,USD,barrel,true,"Airlines;Paints;Tyres;Chemicals;Energy",Yahoo Finance fallback,https://finance.yahoo.com/quote/BZ=F
+copper,Copper,Industrial Metal,COMEX Copper Futures,HG=F,USD,lb,true,"Cables;Electricals;Capital Goods;Metals",Yahoo Finance fallback,https://finance.yahoo.com/quote/HG=F
+aluminium,Aluminium,Industrial Metal,LME Aluminium proxy,ALI=F,USD,tonne,true,"Cables;Auto;Packaging;Metals",Yahoo Finance fallback,https://finance.yahoo.com/quote/ALI=F
+natural_rubber,Natural Rubber,Agriculture,TOCOM/OSE Rubber proxy,RSS3.SG,JPY,kg,true,"Tyres",Yahoo Finance fallback,https://finance.yahoo.com/quote/RSS3.SG
+natural_gas,Natural Gas,Energy,NYMEX Natural Gas,NG=F,USD,mmbtu,true,"Chemicals;Power;Fertilisers",Yahoo Finance fallback,https://finance.yahoo.com/quote/NG=F
+silver,Silver,Precious/Industrial Metal,COMEX Silver Futures,SI=F,USD,oz,true,"Solar Manufacturing;Electronics",Yahoo Finance fallback,https://finance.yahoo.com/quote/SI=F
+palm_oil,Palm Oil,Agriculture,Palm Oil proxy,FCPO=F,MYR,tonne,true,"FMCG;Consumer Goods",Yahoo Finance fallback,https://finance.yahoo.com/quote/FCPO=F
+usd_inr,USD/INR,Currency,Yahoo USD/INR,INR=X,INR,USD,true,"Import Exposed",Yahoo Finance fallback,https://finance.yahoo.com/quote/INR=X

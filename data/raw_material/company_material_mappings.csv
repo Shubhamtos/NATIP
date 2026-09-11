@@ -1,0 +1,16 @@
+symbol,company_name,sector,raw_material_id,raw_material_name,relationship,material_cost_pct_cogs,material_spend_pct_revenue,import_dependency,source_countries,supplier_concentration,hedge_ratio,hedge_expiry,inventory_days,pass_through_ratio,pass_through_lag_days,pricing_power,vertical_integration,historical_sensitivity,evidence_source_url,evidence_date,verification_status,analyst_notes,confidence,effective_from,effective_to,active
+CEATLTD,CEAT,Tyres,natural_rubber,Natural Rubber,Consumer,,,,,,,,,,,,,,,,Template Unverified,"Template only. Add annual-report evidence before using for ML.",,2026-08-30,,true
+APOLLOTYRE,Apollo Tyres,Tyres,natural_rubber,Natural Rubber,Consumer,,,,,,,,,,,,,,,,Template Unverified,"Template only. Add annual-report evidence before using for ML.",,2026-08-30,,true
+ASIANPAINT,Asian Paints,Paints,brent_crude,Brent Crude,Consumer,,,,,,,,,,,,,,,,Template Unverified,"Template only. Add company evidence for derivatives/TiO2 exposure.",,2026-08-30,,true
+BERGEPAINT,Berger Paints,Paints,brent_crude,Brent Crude,Consumer,,,,,,,,,,,,,,,,Template Unverified,"Template only. Add company evidence for derivatives/TiO2 exposure.",,2026-08-30,,true
+POLYCAB,Polycab India,Cables,copper,Copper,Consumer,,,,,,,,,,,,,,,,Template Unverified,"Template only. Add copper cost-share evidence before using for ML.",,2026-08-30,,true
+KEI,KEI Industries,Cables,copper,Copper,Consumer,,,,,,,,,,,,,,,,Template Unverified,"Template only. Add copper cost-share evidence before using for ML.",,2026-08-30,,true
+INDIGO,InterGlobe Aviation,Airlines,brent_crude,Brent Crude,Consumer,,,,,,,,,,,,,,,,Template Unverified,"Template only. Prefer ATF/PPAC data and hedge disclosures for verification.",,2026-08-30,,true
+ULTRACEMCO,UltraTech Cement,Cement,brent_crude,Brent Crude,Consumer,,,,,,,,,,,,,,,,Template Unverified,"Template only. Use coal/petcoke/power evidence before verification.",,2026-08-30,,true
+SHREECEM,Shree Cement,Cement,brent_crude,Brent Crude,Consumer,,,,,,,,,,,,,,,,Template Unverified,"Template only. Use coal/petcoke/power evidence before verification.",,2026-08-30,,true
+TATASTEEL,Tata Steel,Steel,copper,Copper,Integrated,,,,,,,,,,,,,,,,Template Unverified,"Template only. Replace with iron ore/coking coal verified mapping.",,2026-08-30,,true
+JSWSTEEL,JSW Steel,Steel,copper,Copper,Integrated,,,,,,,,,,,,,,,,Template Unverified,"Template only. Replace with iron ore/coking coal verified mapping.",,2026-08-30,,true
+HINDALCO,Hindalco Industries,Metals,aluminium,Aluminium,Producer,,,,,,,,,,,,,,,,Template Unverified,"Template only. Verify upstream/downstream exposure from filings.",,2026-08-30,,true
+TATACONSUM,Tata Consumer Products,FMCG,palm_oil,Palm Oil,Consumer,,,,,,,,,,,,,,,,Template Unverified,"Template only. Verify actual edible oil/packaging exposure before use.",,2026-08-30,,true
+HINDUNILVR,Hindustan Unilever,FMCG,palm_oil,Palm Oil,Consumer,,,,,,,,,,,,,,,,Template Unverified,"Template only. Verify palm oil and packaging exposure before use.",,2026-08-30,,true
+WAAREEENER,Waaree Energies,Solar Manufacturing,silver,Silver,Consumer,,,,,,,,,,,,,,,,Template Unverified,"Template only. Verify silver paste/polysilicon exposure before use.",,2026-08-30,,true

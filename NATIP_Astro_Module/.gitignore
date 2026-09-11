@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.deps/
+.venv/
+*.egg-info/
+build/
+dist/
+astro_events*.csv
+astro_events*.json
+

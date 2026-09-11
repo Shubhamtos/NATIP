@@ -1,0 +1,151 @@
+Ticker,Company,Sector,MarketCapCategory,Group
+RELIANCE.NS,Reliance Industries,Energy,LargeCap,Existing10
+TCS.NS,Tata Consultancy Services,Information Technology,LargeCap,Existing10
+ICICIBANK.NS,ICICI Bank,Financial Services,LargeCap,Existing10
+M&M.NS,Mahindra & Mahindra,Automobile,LargeCap,Existing10
+SUNPHARMA.NS,Sun Pharmaceutical Industries,Healthcare,LargeCap,Existing10
+ITC.NS,ITC,Consumer Goods,LargeCap,Existing10
+BEL.NS,Bharat Electronics,Capital Goods,LargeCap,Existing10
+TATASTEEL.NS,Tata Steel,Metals,LargeCap,Existing10
+BHARTIARTL.NS,Bharti Airtel,Telecom,LargeCap,Existing10
+LT.NS,Larsen & Toubro,Capital Goods,LargeCap,Existing10
+HDFCBANK.NS,HDFC Bank,Financial Services,LargeCap,Nifty50Additional
+INFY.NS,Infosys,Information Technology,LargeCap,Nifty50Additional
+SBIN.NS,State Bank of India,Financial Services,LargeCap,Nifty50Additional
+HINDUNILVR.NS,Hindustan Unilever,Consumer Goods,LargeCap,Nifty50Additional
+KOTAKBANK.NS,Kotak Mahindra Bank,Financial Services,LargeCap,Nifty50Additional
+AXISBANK.NS,Axis Bank,Financial Services,LargeCap,Nifty50Additional
+BAJFINANCE.NS,Bajaj Finance,Financial Services,LargeCap,Nifty50Additional
+ASIANPAINT.NS,Asian Paints,Consumer Durables,LargeCap,Nifty50Additional
+MARUTI.NS,Maruti Suzuki India,Automobile,LargeCap,Nifty50Additional
+TITAN.NS,Titan Company,Consumer Durables,LargeCap,Nifty50Additional
+ULTRACEMCO.NS,UltraTech Cement,Cement,LargeCap,Nifty50Additional
+WIPRO.NS,Wipro,Information Technology,LargeCap,Nifty50Additional
+ONGC.NS,Oil and Natural Gas Corporation,Energy,LargeCap,Nifty50Additional
+NTPC.NS,NTPC,Power,LargeCap,Nifty50Additional
+POWERGRID.NS,Power Grid Corporation of India,Power,LargeCap,Nifty50Additional
+HCLTECH.NS,HCL Technologies,Information Technology,LargeCap,Nifty50Additional
+TECHM.NS,Tech Mahindra,Information Technology,LargeCap,Nifty50Additional
+NESTLEIND.NS,Nestle India,Consumer Goods,LargeCap,Nifty50Additional
+JSWSTEEL.NS,JSW Steel,Metals,LargeCap,Nifty50Additional
+HINDALCO.NS,Hindalco Industries,Metals,LargeCap,Nifty50Additional
+COALINDIA.NS,Coal India,Energy,LargeCap,Nifty50Additional
+ADANIENT.NS,Adani Enterprises,Diversified,LargeCap,Nifty50Additional
+ADANIPORTS.NS,Adani Ports and SEZ,Infrastructure,LargeCap,Nifty50Additional
+GRASIM.NS,Grasim Industries,Diversified,LargeCap,Nifty50Additional
+CIPLA.NS,Cipla,Healthcare,LargeCap,Nifty50Additional
+DRREDDY.NS,Dr. Reddy's Laboratories,Healthcare,LargeCap,Nifty50Additional
+DIVISLAB.NS,Divi's Laboratories,Healthcare,LargeCap,Nifty50Additional
+APOLLOHOSP.NS,Apollo Hospitals Enterprise,Healthcare,LargeCap,Nifty50Additional
+BAJAJFINSV.NS,Bajaj Finserv,Financial Services,LargeCap,Nifty50Additional
+HDFCLIFE.NS,HDFC Life Insurance,Financial Services,LargeCap,Nifty50Additional
+SBILIFE.NS,SBI Life Insurance,Financial Services,LargeCap,Nifty50Additional
+HEROMOTOCO.NS,Hero MotoCorp,Automobile,LargeCap,Nifty50Additional
+EICHERMOT.NS,Eicher Motors,Automobile,LargeCap,Nifty50Additional
+BRITANNIA.NS,Britannia Industries,Consumer Goods,LargeCap,Nifty50Additional
+TATACONSUM.NS,Tata Consumer Products,Consumer Goods,LargeCap,Nifty50Additional
+UPL.NS,UPL,Chemicals,LargeCap,Nifty50Additional
+BPCL.NS,Bharat Petroleum Corporation,Energy,LargeCap,Nifty50Additional
+IOC.NS,Indian Oil Corporation,Energy,LargeCap,Nifty50Additional
+INDUSINDBK.NS,IndusInd Bank,Financial Services,LargeCap,Nifty50Additional
+BAJAJ-AUTO.NS,Bajaj Auto,Automobile,LargeCap,Nifty50Additional
+ABB.NS,ABB India,Capital Goods,LargeCap,NiftyNext50
+ADANIENSOL.NS,Adani Energy Solutions,Power,LargeCap,NiftyNext50
+ADANIGREEN.NS,Adani Green Energy,Power,LargeCap,NiftyNext50
+ADANIPOWER.NS,Adani Power,Power,LargeCap,NiftyNext50
+AMBUJACEM.NS,Ambuja Cements,Cement,LargeCap,NiftyNext50
+BAJAJHLDNG.NS,Bajaj Holdings and Investment,Financial Services,LargeCap,NiftyNext50
+BANKBARODA.NS,Bank of Baroda,Financial Services,LargeCap,NiftyNext50
+BHEL.NS,Bharat Heavy Electricals,Capital Goods,LargeCap,NiftyNext50
+BOSCHLTD.NS,Bosch,Automobile,LargeCap,NiftyNext50
+CANBK.NS,Canara Bank,Financial Services,LargeCap,NiftyNext50
+ABCAPITAL.NS,Aditya Birla Capital,Financial Services,LargeCap,NiftyNext50
+CGPOWER.NS,CG Power and Industrial Solutions,Capital Goods,LargeCap,NiftyNext50
+CHOLAFIN.NS,Cholamandalam Investment and Finance,Financial Services,LargeCap,NiftyNext50
+DABUR.NS,Dabur India,Consumer Goods,LargeCap,NiftyNext50
+DLF.NS,DLF,Real Estate,LargeCap,NiftyNext50
+DMART.NS,Avenue Supermarts,Consumer Services,LargeCap,NiftyNext50
+GAIL.NS,GAIL India,Energy,LargeCap,NiftyNext50
+GODREJCP.NS,Godrej Consumer Products,Consumer Goods,LargeCap,NiftyNext50
+HAL.NS,Hindustan Aeronautics,Capital Goods,LargeCap,NiftyNext50
+HAVELLS.NS,Havells India,Consumer Durables,LargeCap,NiftyNext50
+INDHOTEL.NS,Indian Hotels Company,Consumer Services,LargeCap,NiftyNext50
+ICICIGI.NS,ICICI Lombard General Insurance,Financial Services,LargeCap,NiftyNext50
+ICICIPRULI.NS,ICICI Prudential Life Insurance,Financial Services,LargeCap,NiftyNext50
+INDIGO.NS,InterGlobe Aviation,Services,LargeCap,NiftyNext50
+IRFC.NS,Indian Railway Finance Corporation,Financial Services,LargeCap,NiftyNext50
+JINDALSTEL.NS,Jindal Steel and Power,Metals,LargeCap,NiftyNext50
+JSWENERGY.NS,JSW Energy,Power,LargeCap,NiftyNext50
+LICI.NS,Life Insurance Corporation of India,Financial Services,LargeCap,NiftyNext50
+LODHA.NS,Macrotech Developers,Real Estate,LargeCap,NiftyNext50
+OFSS.NS,Oracle Financial Services Software,Information Technology,LargeCap,NiftyNext50
+MANKIND.NS,Mankind Pharma,Healthcare,LargeCap,NiftyNext50
+MAXHEALTH.NS,Max Healthcare Institute,Healthcare,LargeCap,NiftyNext50
+MOTHERSON.NS,Samvardhana Motherson International,Automobile,LargeCap,NiftyNext50
+NAUKRI.NS,Info Edge India,Consumer Services,LargeCap,NiftyNext50
+NHPC.NS,NHPC,Power,LargeCap,NiftyNext50
+PFC.NS,Power Finance Corporation,Financial Services,LargeCap,NiftyNext50
+PIDILITIND.NS,Pidilite Industries,Chemicals,LargeCap,NiftyNext50
+PNB.NS,Punjab National Bank,Financial Services,LargeCap,NiftyNext50
+RECLTD.NS,REC,Financial Services,LargeCap,NiftyNext50
+SHREECEM.NS,Shree Cement,Cement,LargeCap,NiftyNext50
+SIEMENS.NS,Siemens,Capital Goods,LargeCap,NiftyNext50
+TATAPOWER.NS,Tata Power,Power,LargeCap,NiftyNext50
+TORNTPHARM.NS,Torrent Pharmaceuticals,Healthcare,LargeCap,NiftyNext50
+TRENT.NS,Trent,Consumer Services,LargeCap,NiftyNext50
+TVSMOTOR.NS,TVS Motor Company,Automobile,LargeCap,NiftyNext50
+UNIONBANK.NS,Union Bank of India,Financial Services,LargeCap,NiftyNext50
+VBL.NS,Varun Beverages,Consumer Goods,LargeCap,NiftyNext50
+VEDL.NS,Vedanta,Metals,LargeCap,NiftyNext50
+ETERNAL.NS,Eternal,Consumer Services,LargeCap,NiftyNext50
+ZYDUSLIFE.NS,Zydus Lifesciences,Healthcare,LargeCap,NiftyNext50
+ACC.NS,ACC,Cement,MidCap,DiversifiedMidcap
+APLAPOLLO.NS,APL Apollo Tubes,Metals,MidCap,DiversifiedMidcap
+AUBANK.NS,AU Small Finance Bank,Financial Services,MidCap,DiversifiedMidcap
+ALKEM.NS,Alkem Laboratories,Healthcare,MidCap,DiversifiedMidcap
+ASHOKLEY.NS,Ashok Leyland,Automobile,MidCap,DiversifiedMidcap
+ASTRAL.NS,Astral,Industrials,MidCap,DiversifiedMidcap
+AUROPHARMA.NS,Aurobindo Pharma,Healthcare,MidCap,DiversifiedMidcap
+BALKRISIND.NS,Balkrishna Industries,Automobile,MidCap,DiversifiedMidcap
+BANDHANBNK.NS,Bandhan Bank,Financial Services,MidCap,DiversifiedMidcap
+BANKINDIA.NS,Bank of India,Financial Services,MidCap,DiversifiedMidcap
+BDL.NS,Bharat Dynamics,Capital Goods,MidCap,DiversifiedMidcap
+BHARATFORG.NS,Bharat Forge,Automobile,MidCap,DiversifiedMidcap
+BIOCON.NS,Biocon,Healthcare,MidCap,DiversifiedMidcap
+COFORGE.NS,Coforge,Information Technology,MidCap,DiversifiedMidcap
+COLPAL.NS,Colgate Palmolive India,Consumer Goods,MidCap,DiversifiedMidcap
+CONCOR.NS,Container Corporation of India,Services,MidCap,DiversifiedMidcap
+CUMMINSIND.NS,Cummins India,Capital Goods,MidCap,DiversifiedMidcap
+DALBHARAT.NS,Dalmia Bharat,Cement,MidCap,DiversifiedMidcap
+DEEPAKNTR.NS,Deepak Nitrite,Chemicals,MidCap,DiversifiedMidcap
+DELHIVERY.NS,Delhivery,Services,MidCap,DiversifiedMidcap
+DIXON.NS,Dixon Technologies,Consumer Durables,MidCap,DiversifiedMidcap
+ESCORTS.NS,Escorts Kubota,Automobile,MidCap,DiversifiedMidcap
+FEDERALBNK.NS,Federal Bank,Financial Services,MidCap,DiversifiedMidcap
+FORTIS.NS,Fortis Healthcare,Healthcare,MidCap,DiversifiedMidcap
+GLAND.NS,Gland Pharma,Healthcare,MidCap,DiversifiedMidcap
+GMRAIRPORT.NS,GMR Airports,Infrastructure,MidCap,DiversifiedMidcap
+GODREJPROP.NS,Godrej Properties,Real Estate,MidCap,DiversifiedMidcap
+PETRONET.NS,Petronet LNG,Energy,MidCap,DiversifiedMidcap
+HDFCAMC.NS,HDFC Asset Management Company,Financial Services,MidCap,DiversifiedMidcap
+HINDPETRO.NS,Hindustan Petroleum Corporation,Energy,MidCap,DiversifiedMidcap
+HONAUT.NS,Honeywell Automation India,Capital Goods,MidCap,DiversifiedMidcap
+IDFCFIRSTB.NS,IDFC First Bank,Financial Services,MidCap,DiversifiedMidcap
+IGL.NS,Indraprastha Gas,Energy,MidCap,DiversifiedMidcap
+INDUSTOWER.NS,Indus Towers,Telecom,MidCap,DiversifiedMidcap
+IPCALAB.NS,IPCA Laboratories,Healthcare,MidCap,DiversifiedMidcap
+JSL.NS,Jindal Stainless,Metals,MidCap,DiversifiedMidcap
+JUBLFOOD.NS,Jubilant FoodWorks,Consumer Services,MidCap,DiversifiedMidcap
+LALPATHLAB.NS,Dr. Lal PathLabs,Healthcare,MidCap,DiversifiedMidcap
+LAURUSLABS.NS,Laurus Labs,Healthcare,MidCap,DiversifiedMidcap
+LICHSGFIN.NS,LIC Housing Finance,Financial Services,MidCap,DiversifiedMidcap
+LTTS.NS,L&T Technology Services,Information Technology,MidCap,DiversifiedMidcap
+LUPIN.NS,Lupin,Healthcare,MidCap,DiversifiedMidcap
+M&MFIN.NS,Mahindra & Mahindra Financial Services,Financial Services,MidCap,DiversifiedMidcap
+MANAPPURAM.NS,Manappuram Finance,Financial Services,MidCap,DiversifiedMidcap
+MARICO.NS,Marico,Consumer Goods,MidCap,DiversifiedMidcap
+MFSL.NS,Max Financial Services,Financial Services,MidCap,DiversifiedMidcap
+MPHASIS.NS,Mphasis,Information Technology,MidCap,DiversifiedMidcap
+MRF.NS,MRF,Automobile,MidCap,DiversifiedMidcap
+NMDC.NS,NMDC,Metals,MidCap,DiversifiedMidcap
+OBEROIRLTY.NS,Oberoi Realty,Real Estate,MidCap,DiversifiedMidcap

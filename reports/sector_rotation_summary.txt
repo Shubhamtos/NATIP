@@ -1,0 +1,17 @@
+MARKET REGIME: RISK_OFF
+
+TOP FRESH ROTATION
+None
+
+ESTABLISHED LEADERS
+1. Capital Goods - Leadership Score 76
+
+WEAKENING SECTORS
+1. Consumer Services - Rotation Score 47
+2. Consumer Durables - Rotation Score 36
+3. Chemicals - Rotation Score 33
+4. Healthcare - Rotation Score 33
+5. Automobile - Rotation Score 23
+
+ROTATION OUT
+1. Services - Rotation Score 22
