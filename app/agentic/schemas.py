@@ -44,7 +44,7 @@ class AgentRunRequest(BaseModel):
 
     query: str = Field(min_length=1)
     symbol: str | None = None
-    max_steps: int = Field(default=8, ge=1, le=20)
+    max_steps: int = Field(default=10, ge=1, le=20)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
