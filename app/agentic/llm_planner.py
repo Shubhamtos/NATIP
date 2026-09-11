@@ -1,9 +1,9 @@
-"""Optional LLM-driven planner for NATIP agentic workflows.
+"""LLM-driven planner for NATIP agentic workflows.
 
-The planner is constrained to NATIP's explicit tool allow-list. If the model
-returns invalid JSON, unknown tools, unsafe ordering, or otherwise unusable
-output, NATIP falls back to the deterministic planner rather than failing the
-request.
+The agentic planner is intentionally separate from NATIP's deterministic
+planner. It is constrained to NATIP's explicit tool allow-list and fails closed
+if the model returns invalid JSON, unknown tools, unsafe ordering, or otherwise
+unusable output. It does not silently fall back to deterministic planning.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ import json
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.agentic.planner import AgenticPlanner
 from app.agentic.schemas import AgentRunRequest, PlanStep
 from app.decision.ai_reasoning.gemini import GeminiReasoningClient
 
@@ -32,49 +31,38 @@ class GeminiPlannerTextClient:
     client: GeminiReasoningClient
 
     async def generate(self, prompt: str) -> str:
-        # The existing client already owns retry, timeout, fallback-model and
-        # HTTP error behavior. Keep those semantics in one place.
         return await asyncio.to_thread(self.client._generate_text, prompt)
 
 
-class LLMAgenticPlanner(AgenticPlanner):
+class LLMAgenticPlanner:
     """Use an LLM to choose NATIP tools while enforcing deterministic guards."""
 
-    def __init__(
-        self,
-        *,
-        client: PlannerTextClient,
-        fallback: AgenticPlanner | None = None,
-    ) -> None:
+    def __init__(self, *, client: PlannerTextClient) -> None:
         self.client = client
-        self.fallback = fallback or AgenticPlanner()
 
     async def create_plan_async(
         self,
         request: AgentRunRequest,
         available_tools: set[str],
     ) -> list[PlanStep]:
-        """Create and validate an LLM-generated plan."""
+        """Create and validate an LLM-generated plan without fallback."""
 
         prompt = self._prompt(request, available_tools)
-        try:
-            raw = await self.client.generate(prompt)
-            plan = self._parse_plan(raw, request=request, available_tools=available_tools)
-            self._validate_dependencies(plan, available_tools=available_tools)
-        except Exception:
-            return self.fallback.create_plan(request, available_tools)
-        return plan or self.fallback.create_plan(request, available_tools)
+        raw = await self.client.generate(prompt)
+        plan = self._parse_plan(raw, request=request, available_tools=available_tools)
+        self._validate_dependencies(plan, available_tools=available_tools)
+        if not plan:
+            raise ValueError("LLM planner returned an empty NATIP plan")
+        return plan
 
     def create_plan(self, request: AgentRunRequest, available_tools: set[str]) -> list[PlanStep]:
-        """Synchronous compatibility path used only outside an active event loop."""
+        """Synchronous compatibility path for callers outside an event loop."""
 
         try:
             asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(self.create_plan_async(request, available_tools))
-        # The orchestrator detects create_plan_async and awaits it. Returning a
-        # deterministic plan here keeps direct callers safe inside event loops.
-        return self.fallback.create_plan(request, available_tools)
+        raise RuntimeError("LLMAgenticPlanner.create_plan_async must be awaited inside an event loop")
 
     @staticmethod
     def _prompt(request: AgentRunRequest, available_tools: set[str]) -> str:
