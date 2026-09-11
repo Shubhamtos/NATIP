@@ -25,13 +25,16 @@ class AgenticPlanner:
             add(
                 "find_buying_opportunities",
                 "The request asks NATIP to screen or rank buying opportunities.",
+                symbol=symbol,
             )
         elif symbol or "analy" in query or "stock" in query:
+            add("get_market_data", "Fresh quote, history, and profile data are required first.", symbol=symbol)
             add("technical_analysis", "Price structure is required for a stock analysis.", symbol=symbol)
             add("fundamental_analysis", "Business quality should be checked before a conclusion.", symbol=symbol)
             add("valuation_analysis", "Valuation context is relevant to the final decision.", symbol=symbol)
             add("sector_analysis", "Sector context can materially affect the stock setup.", symbol=symbol)
             add("macro_analysis", "Macro context can modify risk and conviction.", symbol=symbol)
+            add("sentiment_analysis", "Sentiment is useful supporting evidence when available.", symbol=symbol)
             add("risk_analysis", "Risk gates must run before a trading conclusion.", symbol=symbol)
             add("stock_consensus", "Existing NATIP consensus should combine agent signals.", symbol=symbol)
         else:
