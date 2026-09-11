@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 
-from app.agentic.gateway import AgenticGateway, build_default_gateway
+from app.agentic.gateway import AgenticGateway, build_agentic_gateway
 from app.agentic.schemas import AgentRunRequest, AgentRunResponse
 from app.agents import AgentContext
 from app.evidence import EvidenceRecord
@@ -16,7 +16,6 @@ from app.intelligence.raw_material.service import RawMaterialImpactService
 from app.models import CompanyRawMaterialMapping
 
 app = FastAPI(title="NATIP", version="0.2.0")
-_agentic_gateway = build_default_gateway()
 
 
 def get_runtime() -> AppRuntime:
@@ -26,9 +25,12 @@ def get_runtime() -> AppRuntime:
 
 
 def get_agentic_gateway() -> AgenticGateway:
-    """Return the NATIP agentic gateway."""
+    """Build and return the Gemini-backed NATIP agentic gateway."""
 
-    return _agentic_gateway
+    try:
+        return build_agentic_gateway()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 def get_raw_material_service() -> RawMaterialImpactService:
@@ -60,7 +62,7 @@ async def run_agentic_request(
     request: AgentRunRequest,
     gateway: Annotated[AgenticGateway, Depends(get_agentic_gateway)],
 ) -> AgentRunResponse:
-    """Execute one controlled NATIP agentic workflow."""
+    """Execute one controlled Gemini-backed NATIP agentic workflow."""
 
     return await gateway.run(request)
 
@@ -103,84 +105,53 @@ async def get_history(
 async def get_market_status(
     runtime_dependency: Annotated[AppRuntime, Depends(get_runtime)],
 ) -> dict[str, object]:
-    """Return normalized market status."""
+    """Return market provider status."""
 
-    status = await runtime_dependency.market_provider.get_market_status()
-    return {"success": True, "data": status.model_dump(mode="json")}
+    return {
+        "success": True,
+        "data": await runtime_dependency.market_provider.get_market_status(),
+    }
 
 
 @app.get("/evidence")
-async def list_evidence(
+async def get_evidence(
     runtime_dependency: Annotated[AppRuntime, Depends(get_runtime)],
-    symbol: str | None = None,
-    agent: str | None = None,
-) -> dict[str, list[dict[str, object]]]:
-    """List stored evidence records."""
-
-    records: list[EvidenceRecord] = await runtime_dependency.evidence_store.search(
-        symbol=symbol,
-        agent=agent,
-    )
-    return {"data": [record.model_dump(mode="json") for record in records]}
-
-
-@app.get("/raw-material/overview")
-async def raw_material_overview(
-    service: Annotated[RawMaterialImpactService, Depends(get_raw_material_service)],
 ) -> dict[str, object]:
-    """Return raw-material impact dashboard overview."""
+    """Return all evidence records in the local store."""
 
-    return {"success": True, "data": service.overview()}
+    records = runtime_dependency.evidence_store.list_records()
+    return {
+        "success": True,
+        "data": [record.model_dump(mode="json") for record in records],
+    }
 
 
-@app.get("/raw-material/watchlist")
-async def raw_material_watchlist(
-    service: Annotated[RawMaterialImpactService, Depends(get_raw_material_service)],
+@app.post("/evidence")
+async def add_evidence(
+    record: EvidenceRecord,
+    runtime_dependency: Annotated[AppRuntime, Depends(get_runtime)],
 ) -> dict[str, object]:
-    """Return raw-material impact watchlist."""
+    """Store one evidence record."""
 
-    rows = service.build_watchlist()
-    return {"success": True, "data": [row.model_dump(mode="json") for row in rows]}
-
-
-@app.get("/raw-material/stock/{symbol}")
-async def raw_material_stock_detail(
-    symbol: str,
-    service: Annotated[RawMaterialImpactService, Depends(get_raw_material_service)],
-) -> dict[str, object]:
-    """Return stock-specific raw-material evidence."""
-
-    output = service.build_agent_output(symbol)
-    return {"success": True, "data": output.model_dump(mode="json")}
-
-
-@app.get("/raw-material/materials")
-async def raw_material_master(
-    service: Annotated[RawMaterialImpactService, Depends(get_raw_material_service)],
-) -> dict[str, object]:
-    """Return tracked raw materials."""
-
-    return {"success": True, "data": [row.model_dump(mode="json") for row in service.materials()]}
+    runtime_dependency.evidence_store.add(record)
+    return {"success": True, "data": record.model_dump(mode="json")}
 
 
 @app.get("/raw-material/mappings")
-async def raw_material_mappings(
-    service: Annotated[RawMaterialImpactService, Depends(get_raw_material_service)],
-    symbol: str | None = None,
-) -> dict[str, object]:
-    """Return company-material mapping rows."""
+async def get_raw_material_mappings() -> dict[str, object]:
+    """Return configured raw-material mappings."""
 
-    rows = service.mappings(symbol=symbol)
-    return {"success": True, "data": [row.model_dump(mode="json") for row in rows]}
+    service = get_raw_material_service()
+    return {"success": True, "data": service.list_mappings()}
 
 
 @app.post("/raw-material/mappings")
 async def upsert_raw_material_mapping(
     mapping: CompanyRawMaterialMapping,
-    service: Annotated[RawMaterialImpactService, Depends(get_raw_material_service)],
     _: Annotated[None, Depends(require_raw_material_admin)],
 ) -> dict[str, object]:
-    """Create or update a company-material mapping."""
+    """Create or update a raw-material mapping."""
 
-    service.store.upsert_mapping(mapping)
-    return {"success": True, "data": mapping.model_dump(mode="json")}
+    service = get_raw_material_service()
+    result = service.upsert_mapping(mapping)
+    return {"success": True, "data": result.model_dump(mode="json")}
