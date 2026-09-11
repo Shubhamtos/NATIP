@@ -1,4 +1,4 @@
-"""Streamlit page for NATIP's controlled agentic assistant."""
+"""Streamlit page for NATIP's controlled Gemini-backed agentic assistant."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 
 import streamlit as st
 
-from app.agentic.gateway import build_default_gateway
+from app.agentic.gateway import build_agentic_gateway
 from app.agentic.schemas import AgentRunRequest
 from app.core.config import get_settings
 
@@ -15,21 +15,27 @@ from app.core.config import get_settings
 st.set_page_config(page_title="NATIP Agentic Assistant", layout="wide")
 st.title("NATIP Agentic Assistant")
 st.caption(
-    "Goal-driven orchestration over NATIP's existing analysis, risk and consensus capabilities."
+    "Agentic mode is kept separate from NATIP's deterministic workflow. "
+    "This page uses Gemini planning only."
 )
 
 settings = get_settings()
-planner_mode = (
-    "LLM planner (Gemini)"
-    if settings.gemini_api_key is not None
-    and settings.gemini_api_key.get_secret_value().strip()
-    else "Deterministic planner"
+agentic_ready = (
+    settings.gemini_api_key is not None
+    and bool(settings.gemini_api_key.get_secret_value().strip())
 )
-st.info(f"Planner mode: {planner_mode}")
+
+if agentic_ready:
+    st.info(f"Agentic planner: Gemini · {settings.gemini_model}")
+else:
+    st.error(
+        "Agentic mode requires NATIP_GEMINI_API_KEY. "
+        "The deterministic NATIP workflow remains available separately."
+    )
 
 with st.form("natip-agentic-form"):
     query = st.text_area(
-        "What should NATIP do?",
+        "What should the agentic system do?",
         placeholder="Analyze RELIANCE for a positional opportunity and explain the main risks.",
         height=110,
     )
@@ -39,11 +45,11 @@ with st.form("natip-agentic-form"):
         horizon = st.selectbox("Horizon", ["positional", "swing", "investment"], index=0)
     with col2:
         max_steps = st.slider("Maximum agentic steps", min_value=1, max_value=20, value=10)
-    submitted = st.form_submit_button("Run NATIP Agent")
+    submitted = st.form_submit_button("Run Agentic NATIP", disabled=not agentic_ready)
 
 if submitted:
     if not query.strip():
-        st.error("Enter a request for NATIP.")
+        st.error("Enter a request for agentic NATIP.")
     else:
         metadata = {"horizon": horizon}
         request = AgentRunRequest(
@@ -52,9 +58,13 @@ if submitted:
             max_steps=max_steps,
             metadata=metadata,
         )
-        gateway = build_default_gateway()
-        with st.spinner("Planning and running NATIP tools..."):
-            response = asyncio.run(gateway.run(request))
+        try:
+            gateway = build_agentic_gateway()
+            with st.spinner("Gemini is planning and running approved NATIP tools..."):
+                response = asyncio.run(gateway.run(request))
+        except Exception as exc:
+            st.error(f"Agentic run failed: {exc}")
+            st.stop()
 
         if response.status == "completed":
             st.success(f"Run completed · {response.run_id}")
@@ -63,7 +73,7 @@ if submitted:
         else:
             st.error(f"Run failed · {response.run_id}")
 
-        st.subheader("Plan")
+        st.subheader("Agentic plan")
         for index, step in enumerate(response.plan, start=1):
             st.markdown(f"**{index}. {step.tool}** — {step.reason}")
 
