@@ -11,7 +11,7 @@ from app.decision.ai_reasoning.gemini import GeminiReasoningClient
 
 
 class AgenticGateway:
-    """Thin boundary between API/UI callers and the orchestrator."""
+    """Thin boundary between agentic callers and the agentic orchestrator."""
 
     def __init__(self, orchestrator: AgenticOrchestrator) -> None:
         self.orchestrator = orchestrator
@@ -20,30 +20,37 @@ class AgenticGateway:
         return await self.orchestrator.run(request)
 
 
-def build_default_gateway() -> AgenticGateway:
-    """Build a production gateway with optional LLM planning.
+def build_agentic_gateway() -> AgenticGateway:
+    """Build the Gemini-backed agentic gateway.
 
-    If a Gemini API key is configured, NATIP uses the LLM planner. Without a
-    key, the orchestrator automatically retains the deterministic planner.
+    Agentic execution is deliberately separate from NATIP's deterministic
+    workflow. A configured Gemini API key is required; this function never
+    falls back to deterministic planning.
     """
 
     settings = get_settings()
-    planner = None
-    if settings.gemini_api_key is not None:
-        api_key = settings.gemini_api_key.get_secret_value().strip()
-        if api_key:
-            planner = LLMAgenticPlanner(
-                client=GeminiPlannerTextClient(
-                    GeminiReasoningClient(
-                        api_key=api_key,
-                        model=settings.gemini_model,
-                    )
-                )
-            )
+    if settings.gemini_api_key is None:
+        raise RuntimeError("NATIP_GEMINI_API_KEY is required for agentic mode")
 
+    api_key = settings.gemini_api_key.get_secret_value().strip()
+    if not api_key:
+        raise RuntimeError("NATIP_GEMINI_API_KEY is required for agentic mode")
+
+    planner = LLMAgenticPlanner(
+        client=GeminiPlannerTextClient(
+            GeminiReasoningClient(
+                api_key=api_key,
+                model=settings.gemini_model,
+            )
+        )
+    )
     return AgenticGateway(
         AgenticOrchestrator(
             registry=build_default_tool_registry(),
             planner=planner,
         )
     )
+
+
+# Compatibility alias for code that already imported the original builder.
+build_default_gateway = build_agentic_gateway
