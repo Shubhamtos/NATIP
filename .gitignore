@@ -41,9 +41,13 @@ reports/probability/*
 !reports/probability/frozen_v2_buy_rules.json
 !reports/probability/frozen_tuned_binary77_confidence_config.json
 !reports/probability/frozen_tuned_binary77_confidence_rules.json
+!reports/probability/stock_probability_latest.csv
+!reports/probability/stock_probability_150_full_ranking.csv
+!reports/probability/stock_probability_150_top20.csv
 !outputs/
 outputs/*
 !outputs/.gitkeep
+!outputs/nifty250_frozen_recommendations.csv
 
 # Never commit local Streamlit secrets.
 .streamlit/secrets.toml
