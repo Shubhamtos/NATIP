@@ -38,7 +38,11 @@ class LLMAgenticPlanner:
         prompt = self._prompt(request, available_tools)
         raw = await self.client.generate(prompt)
         plan = self._parse_plan(raw, request=request, available_tools=available_tools)
-        self._validate_dependencies(plan, available_tools=available_tools)
+        self._validate_dependencies(
+            plan,
+            request=request,
+            available_tools=available_tools,
+        )
         if not plan:
             raise ValueError("LLM planner returned an empty NATIP plan")
         return plan
@@ -56,12 +60,15 @@ class LLMAgenticPlanner:
     def _prompt(request: AgentRunRequest, available_tools: set[str]) -> str:
         tools = ", ".join(sorted(available_tools))
         return f"""You are the planning layer for NATIP, an NSE stock research platform.
-Create the smallest safe tool plan needed to answer the user.
+Create the smallest safe tool plan needed to answer the user completely.
 
 Rules:
 - You may ONLY use tools from this allow-list: {tools}
 - Never invent a tool name.
 - Put get_market_data before single-stock analysis tools when it is available.
+- For a single-stock analysis, recommendation, trade, opportunity, buy/sell, positional,
+  swing, investment, or decision request, include stock_consensus as the final step when
+  stock_consensus is available. Include enough analysis evidence before consensus.
 - Put risk_analysis before stock_consensus when both are used.
 - Put stock_consensus last for a single-stock decision when it is available.
 - Do not use astro research for live decisioning.
@@ -115,9 +122,33 @@ Metadata: {json.dumps(request.metadata, default=str)}
         return steps
 
     @staticmethod
+    def _requires_consensus(query: str) -> bool:
+        """Return whether the user's intent expects a final stock decision/output."""
+
+        normalized = query.lower()
+        decision_terms = (
+            "analyze",
+            "analyse",
+            "analysis",
+            "recommend",
+            "opportunity",
+            "buy",
+            "sell",
+            "trade",
+            "decision",
+            "positional",
+            "swing",
+            "investment",
+            "invest",
+        )
+        return any(term in normalized for term in decision_terms)
+
+    @classmethod
     def _validate_dependencies(
+        cls,
         steps: list[PlanStep],
         *,
+        request: AgentRunRequest,
         available_tools: set[str],
     ) -> None:
         """Reject plans that violate NATIP's required execution dependencies."""
@@ -139,10 +170,21 @@ Metadata: {json.dumps(request.metadata, default=str)}
             if any(names.index(tool) < market_index for tool in analysis_tools.intersection(names)):
                 raise ValueError("get_market_data must precede analysis tools")
 
+        if cls._requires_consensus(request.query) and "stock_consensus" in available_tools:
+            if "stock_consensus" not in names:
+                raise ValueError("single-stock decision request requires stock_consensus")
+
         if "stock_consensus" in names:
             consensus_index = names.index("stock_consensus")
             if consensus_index != len(names) - 1:
                 raise ValueError("stock_consensus must be the final step")
+            prior_analysis = [
+                tool
+                for tool in analysis_tools
+                if tool in names and names.index(tool) < consensus_index
+            ]
+            if not prior_analysis:
+                raise ValueError("stock_consensus requires prior analysis evidence")
             if "risk_analysis" in available_tools:
                 if "risk_analysis" not in names:
                     raise ValueError("stock_consensus requires risk_analysis")
