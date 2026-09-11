@@ -32,6 +32,13 @@ def _resolve_symbol(symbol: str | None, context: dict[str, Any]) -> str:
     return value
 
 
+def _yahoo_symbol(symbol: str) -> str:
+    """Return a Yahoo-compatible NSE symbol without duplicating exchange suffixes."""
+
+    cleaned = symbol.strip().upper()
+    return cleaned if "." in cleaned else f"{cleaned}.NS"
+
+
 def _market_output(context: dict[str, Any]) -> dict[str, Any]:
     output = context.get("outputs", {}).get("get_market_data")
     if not isinstance(output, dict):
@@ -53,7 +60,7 @@ def _analysis_payload(context: dict[str, Any]) -> dict[str, Any]:
 async def _fetch_profile(symbol: str) -> dict[str, Any]:
     def load() -> dict[str, Any]:
         try:
-            return dict(yf.Ticker(f"{symbol}.NS").info or {})
+            return dict(yf.Ticker(_yahoo_symbol(symbol)).info or {})
         except Exception as exc:
             return {"profile_error": str(exc)}
 
