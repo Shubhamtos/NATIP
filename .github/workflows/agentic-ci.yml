@@ -32,3 +32,7 @@ jobs:
       - name: Run agentic tests
         run: |
           pytest -q tests/test_agentic_core.py tests/test_api_main.py
+
+      - name: Live RELIANCE fetch and analysis smoke test
+        run: |
+          python scripts/smoke_agentic_reliance.py
