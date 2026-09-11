@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any
 
 import streamlit as st
 
@@ -33,13 +34,72 @@ else:
         "The deterministic NATIP workflow remains available separately."
     )
 
+
+def _render_signal_output(title: str, output: dict[str, Any]) -> None:
+    """Render one analysis/consensus output in a readable form."""
+
+    st.subheader(title)
+    metric_values = []
+    for label, key in (("Action", "action"), ("Score", "score"), ("Confidence", "confidence")):
+        value = output.get(key)
+        if value is not None:
+            metric_values.append((label, value))
+    if metric_values:
+        columns = st.columns(len(metric_values))
+        for column, (label, value) in zip(columns, metric_values):
+            column.metric(label, str(value))
+
+    summary = output.get("summary")
+    if summary:
+        st.write(summary)
+
+    reasons = output.get("reasons") or []
+    if isinstance(reasons, list) and reasons:
+        with st.expander("Evidence / reasons", expanded=True):
+            for item in reasons:
+                st.write(f"- {item}")
+
+
+def _render_primary_result(tool_name: str | None, output: dict[str, Any]) -> None:
+    """Render the primary agentic result even when consensus is not selected."""
+
+    if not tool_name or not output:
+        st.warning("No successful agentic output was produced.")
+        return
+
+    friendly_names = {
+        "stock_consensus": "NATIP Consensus",
+        "technical_analysis": "Technical Analysis",
+        "fundamental_analysis": "Fundamental Analysis",
+        "valuation_analysis": "Valuation Analysis",
+        "sector_analysis": "Sector Analysis",
+        "macro_analysis": "Macro Analysis",
+        "sentiment_analysis": "Sentiment Analysis",
+        "risk_analysis": "Risk Analysis",
+        "get_market_data": "Market Data",
+        "find_buying_opportunities": "Buying Opportunities",
+    }
+    title = friendly_names.get(tool_name, tool_name.replace("_", " ").title())
+
+    if any(key in output for key in ("summary", "action", "score", "confidence", "reasons")):
+        _render_signal_output(title, output)
+        return
+
+    st.subheader(title)
+    st.json(output)
+
+
 with st.form("natip-agentic-form"):
     query = st.text_area(
         "What should the agentic system do?",
         placeholder="Analyze RELIANCE for a positional opportunity and explain the main risks.",
         height=110,
     )
-    symbol = st.text_input("NSE symbol (optional for universe scans)", placeholder="RELIANCE")
+    symbols_text = st.text_input(
+        "NSE symbol(s)",
+        placeholder="RELIANCE or RELIANCE,TCS,INFY",
+        help="At least one symbol is required. Use comma-separated symbols for an opportunity scan.",
+    )
     col1, col2 = st.columns(2)
     with col1:
         horizon = st.selectbox("Horizon", ["positional", "swing", "investment"], index=0)
@@ -48,22 +108,31 @@ with st.form("natip-agentic-form"):
     submitted = st.form_submit_button("Run Agentic NATIP", disabled=not agentic_ready)
 
 if submitted:
-    if not query.strip():
+    clean_query = query.strip()
+    symbols = [item.strip().upper() for item in symbols_text.split(",") if item.strip()]
+
+    if not clean_query:
         st.error("Enter a request for agentic NATIP.")
+    elif not symbols:
+        st.error("Enter at least one NSE symbol. NATIP does not discover a stock universe automatically yet.")
     else:
-        metadata = {"horizon": horizon}
+        metadata: dict[str, Any] = {"horizon": horizon}
+        if len(symbols) > 1:
+            metadata["symbols"] = symbols
         request = AgentRunRequest(
-            query=query.strip(),
-            symbol=symbol.strip().upper() or None,
+            query=clean_query,
+            symbol=symbols[0] if len(symbols) == 1 else None,
             max_steps=max_steps,
             metadata=metadata,
         )
+
         try:
             gateway = build_agentic_gateway()
             with st.spinner("Gemini is planning and running approved NATIP tools..."):
                 response = asyncio.run(gateway.run(request))
         except Exception as exc:
             st.error(f"Agentic run failed: {exc}")
+            st.exception(exc)
             st.stop()
 
         if response.status == "completed":
@@ -73,33 +142,30 @@ if submitted:
         else:
             st.error(f"Run failed · {response.run_id}")
 
-        st.subheader("Agentic plan")
-        for index, step in enumerate(response.plan, start=1):
-            st.markdown(f"**{index}. {step.tool}** — {step.reason}")
+        result = response.result if isinstance(response.result, dict) else {}
+        final_tool = result.get("final_tool")
+        final_output = result.get("final_output")
+        if isinstance(final_output, dict):
+            _render_primary_result(str(final_tool) if final_tool else None, final_output)
+        else:
+            st.warning("The workflow completed but returned no displayable primary result.")
 
-        outputs = response.result.get("tool_outputs", {})
-        consensus = outputs.get("stock_consensus")
-        if isinstance(consensus, dict):
-            st.subheader("NATIP Consensus")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Action", str(consensus.get("action", "—")))
-            c2.metric("Score", str(consensus.get("score", "—")))
-            c3.metric("Confidence", str(consensus.get("confidence", "—")))
-            if consensus.get("summary"):
-                st.write(consensus["summary"])
-            reasons = consensus.get("reasons") or []
-            if reasons:
-                with st.expander("Consensus evidence and audit trail", expanded=True):
-                    for item in reasons:
-                        st.write(f"- {item}")
+        st.subheader("Agentic plan")
+        if response.plan:
+            for index, step in enumerate(response.plan, start=1):
+                st.markdown(f"**{index}. {step.tool}** — {step.reason}")
+        else:
+            st.warning("Gemini returned no executable plan.")
 
         st.subheader("Workflow quality check")
         if response.critic is not None:
             st.write("Sufficient:", response.critic.sufficient)
             for reason in response.critic.reasons:
                 st.write(f"- {reason}")
+        else:
+            st.write("No critic result was returned.")
 
-        with st.expander("Tool execution details"):
+        with st.expander("All tool outputs and errors", expanded=response.status != "completed"):
             for execution in response.tool_executions:
                 status = "✅" if execution.success else "❌"
                 st.markdown(f"**{status} {execution.tool}**")
