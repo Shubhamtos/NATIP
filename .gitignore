@@ -19,11 +19,15 @@ build/
 *.sqlite3
 .natip/
 python-standalone/
+venv_moved_broken_*/
+logs/
+config/com.natip.local.plist
 
 # Local/generated NATIP data. These are too large or private for free cloud deploys.
 data/probability/
 data/fundamentals/
 data/feature_store/
+data/quarterly_results/
 data/reference/raw/
 data/astro/*.bsp
 data/raw_material/*.db

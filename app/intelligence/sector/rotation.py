@@ -752,6 +752,130 @@ def _latest_output_table(latest: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def calculate_sector_stock_contributions(
+    sector: str,
+    as_of_date: str | pd.Timestamp,
+    config: SectorRotationConfig | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Calculate stock-level contribution rows for one sector/date.
+
+    This reuses the Sector Rotation clean cache, benchmark, current universe,
+    20D/60D lookbacks, and equal-weight sector methodology. The contribution
+    score combines a constituent's 20D excess return and its 10D change in
+    that excess return, matching the relative-strength and acceleration inputs
+    used by the sector model.
+    """
+
+    runtime_config = config or SectorRotationConfig()
+    selected_sector = str(sector)
+    selected_date = pd.Timestamp(as_of_date)
+    stock_frame, _quality = load_sector_stock_panel(runtime_config)
+    benchmark = load_benchmark_frame(runtime_config)
+    stock_frame = stock_frame[stock_frame["Date"] <= selected_date].copy()
+    benchmark = benchmark[benchmark["Date"] <= selected_date].copy()
+    if stock_frame.empty or benchmark.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    benchmark_columns = [
+        "Date",
+        "benchmark_close",
+        "benchmark_ret_20d",
+        "benchmark_ret_60d",
+    ]
+    frame = stock_frame.merge(benchmark[benchmark_columns], on="Date", how="inner")
+    frame = frame[frame["Sector"].eq(selected_sector)].copy()
+    frame = frame[frame["is_tradable_row"].astype(bool)].copy()
+    if frame.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    frame = frame.sort_values(["symbol", "Date"])
+    grouped = frame.groupby("symbol", group_keys=False)
+    frame["stock_ret_20d"] = grouped["Close"].pct_change(runtime_config.lookback_short)
+    frame["stock_ret_60d"] = grouped["Close"].pct_change(runtime_config.lookback_medium)
+    frame["stock_excess_return_20d"] = frame["stock_ret_20d"] - frame["benchmark_ret_20d"]
+    frame["stock_excess_return_60d"] = frame["stock_ret_60d"] - frame["benchmark_ret_60d"]
+    frame["stock_rs_ratio"] = frame["Close"] / frame["benchmark_close"]
+    frame["stock_rs_slope"] = grouped["stock_rs_ratio"].pct_change(runtime_config.lookback_short)
+    frame["stock_rs_acceleration"] = frame["stock_excess_return_20d"] - grouped[
+        "stock_excess_return_20d"
+    ].shift(runtime_config.rank_lag_10d)
+    frame["momentum_change_10d"] = frame["stock_ret_20d"] - grouped["stock_ret_20d"].shift(
+        runtime_config.rank_lag_10d
+    )
+    frame["contribution_score"] = (
+        frame["stock_excess_return_20d"].fillna(0.0) * 0.60
+        + frame["stock_rs_acceleration"].fillna(0.0) * 0.40
+    )
+
+    effective_date = frame["Date"].max()
+    latest = frame[frame["Date"].eq(effective_date)].copy()
+    latest = latest.replace([np.inf, -np.inf], np.nan)
+    latest = latest[latest["stock_excess_return_20d"].notna()].copy()
+    if latest.empty:
+        return pd.DataFrame(), frame
+
+    latest["Contribution Direction"] = np.where(
+        latest["contribution_score"].ge(0), "Positive", "Negative"
+    )
+    latest["Rank"] = latest["contribution_score"].abs().rank(ascending=False, method="min").astype(
+        int
+    )
+    latest = latest.sort_values(
+        ["Contribution Direction", "contribution_score"], ascending=[True, False]
+    )
+    contribution = latest[
+        [
+            "Rank",
+            "symbol",
+            "Company",
+            "Sector",
+            "Date",
+            "stock_excess_return_20d",
+            "stock_excess_return_60d",
+            "stock_rs_slope",
+            "stock_rs_acceleration",
+            "momentum_change_10d",
+            "contribution_score",
+            "Contribution Direction",
+        ]
+    ].rename(
+        columns={
+            "symbol": "Ticker",
+            "stock_excess_return_20d": "RS 20D vs Market",
+            "stock_excess_return_60d": "RS 60D vs Market",
+            "stock_rs_slope": "RS Momentum 20D",
+            "stock_rs_acceleration": "Change in RS/Momentum",
+            "momentum_change_10d": "Change in Price Momentum",
+            "contribution_score": "Contribution Score",
+        }
+    )
+    trajectory = frame[
+        [
+            "Date",
+            "symbol",
+            "Company",
+            "Sector",
+            "stock_excess_return_20d",
+            "stock_excess_return_60d",
+            "stock_rs_slope",
+            "stock_rs_acceleration",
+            "momentum_change_10d",
+            "contribution_score",
+        ]
+    ].rename(
+        columns={
+            "symbol": "Ticker",
+            "stock_excess_return_20d": "RS 20D vs Market",
+            "stock_excess_return_60d": "RS 60D vs Market",
+            "stock_rs_slope": "RS Momentum 20D",
+            "stock_rs_acceleration": "Change in RS/Momentum",
+            "momentum_change_10d": "Change in Price Momentum",
+            "contribution_score": "Contribution Score",
+        }
+    )
+    return contribution.reset_index(drop=True), trajectory.reset_index(drop=True)
+
+
 def _add_stock_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     output = frame.sort_values("Date").copy()
     output["Close"] = pd.to_numeric(output["Close"], errors="coerce")

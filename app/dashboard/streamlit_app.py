@@ -7,6 +7,7 @@ import hashlib
 import html
 import json
 import math
+import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -15,6 +16,10 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -87,6 +92,13 @@ from app.intelligence.options import (
     OptionsScanCandidate,
     scan_underlying_options_setup,
 )
+from app.intelligence.quarterly_results import (
+    QuarterlyResultRecord,
+    QuarterlyResultsStore,
+    ScreenerQuarterlyResultsCollector,
+    get_quarterly_results_job,
+    start_quarterly_results_job,
+)
 from app.intelligence.astro.calculations import lunar_phase_angle
 from app.intelligence.astro.market_notes import build_astro_market_report
 from app.intelligence.astro.skyfield_provider import (
@@ -96,7 +108,10 @@ from app.intelligence.astro.skyfield_provider import (
 from app.intelligence.raw_material.adapters import YahooRawMaterialPriceAdapter
 from app.intelligence.raw_material.service import RawMaterialImpactService
 from app.intelligence.raw_material.storage import RawMaterialImpactStore
-from app.intelligence.sector.rotation import SectorRotationCalculator
+from app.intelligence.sector.rotation import (
+    SectorRotationCalculator,
+    calculate_sector_stock_contributions,
+)
 from app.intelligence.technical.indicators import (
     DetectedPattern,
     detect_darvas_box,
@@ -190,7 +205,10 @@ st.markdown(
       .stApp {
         background: var(--natip-bg);
       }
-      #MainMenu, header [data-testid="stToolbar"], .stDeployButton {
+      #MainMenu,
+      header [data-testid="stToolbar"],
+      .stDeployButton,
+      [data-testid="collapsedControl"] {
         visibility: hidden;
         height: 0;
       }
@@ -198,12 +216,7 @@ st.markdown(
         background: var(--natip-bg);
       }
       section[data-testid="stSidebar"] {
-        background: #ffffff;
-        border-right: 1px solid var(--natip-border);
-      }
-      section[data-testid="stSidebar"] label,
-      section[data-testid="stSidebar"] p {
-        color: var(--natip-text);
+        display: none;
       }
       .block-container {
         padding-top: 1.2rem;
@@ -428,6 +441,158 @@ st.markdown(
       }
       .stAlert {
         border-radius: 8px;
+      }
+      .groww-shell {
+        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      .groww-topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 10px 0 14px;
+        border-bottom: 1px solid var(--natip-border);
+        margin-bottom: 10px;
+      }
+      .groww-brand-mark {
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #00a884;
+        color: white;
+        font-weight: 850;
+        font-size: 1rem;
+      }
+      .groww-brand-title {
+        color: #1f2937;
+        font-size: 1.24rem;
+        line-height: 1;
+        font-weight: 800;
+        margin: 0;
+      }
+      .groww-brand-subtitle {
+        color: #667085;
+        font-size: .78rem;
+        margin-top: 3px;
+      }
+      .groww-demo-label {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid #d0d5dd;
+        color: #667085;
+        background: #f9fafb;
+        border-radius: 999px;
+        padding: 4px 9px;
+        font-size: .72rem;
+        font-weight: 700;
+      }
+      .groww-index-strip {
+        display: flex;
+        gap: 12px;
+        overflow-x: auto;
+        padding: 4px 0 14px;
+        margin-bottom: 6px;
+      }
+      .groww-index-card {
+        min-width: 178px;
+        background: white;
+        border: 1px solid var(--natip-border);
+        border-radius: 8px;
+        padding: 12px 13px;
+        box-shadow: 0 1px 2px rgba(16, 24, 40, .03);
+      }
+      .groww-card {
+        background: #ffffff;
+        border: 1px solid var(--natip-border);
+        border-radius: 8px;
+        padding: 16px;
+        box-shadow: 0 1px 2px rgba(16, 24, 40, .035);
+        margin-bottom: 14px;
+      }
+      .groww-section-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .groww-section-title h3 {
+        margin: 0;
+        color: #1f2937;
+        font-size: 1.05rem;
+      }
+      .groww-see-more {
+        color: #00a884;
+        font-weight: 750;
+        font-size: .86rem;
+      }
+      .groww-stock-card {
+        border: 1px solid var(--natip-border);
+        border-radius: 8px;
+        padding: 12px;
+        min-height: 116px;
+        background: #fff;
+        transition: border-color .15s ease, transform .15s ease;
+      }
+      .groww-stock-card:hover {
+        border-color: #00a884;
+        transform: translateY(-1px);
+      }
+      .groww-name {
+        color: #1f2937;
+        font-weight: 780;
+        font-size: .94rem;
+      }
+      .groww-muted {
+        color: #667085;
+        font-size: .82rem;
+      }
+      .groww-price {
+        color: #1f2937;
+        font-weight: 800;
+        font-size: 1.1rem;
+        font-variant-numeric: tabular-nums;
+        margin-top: 8px;
+      }
+      .groww-positive {
+        color: #00a884;
+        font-weight: 760;
+      }
+      .groww-negative {
+        color: #e11900;
+        font-weight: 760;
+      }
+      .groww-tool-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .groww-tool {
+        border: 1px solid var(--natip-border);
+        background: #fbfcfd;
+        border-radius: 8px;
+        padding: 12px;
+        font-weight: 760;
+        color: #1f2937;
+      }
+      .groww-empty {
+        border: 1px dashed #d0d5dd;
+        border-radius: 8px;
+        padding: 18px;
+        color: #667085;
+        background: #fcfcfd;
+      }
+      @media (max-width: 900px) {
+        .groww-topbar {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+        .groww-tool-grid {
+          grid-template-columns: 1fr;
+        }
       }
     </style>
     """,
@@ -1041,7 +1206,7 @@ def render_candlestick(frame: pd.DataFrame, symbol: str, interval: str) -> None:
     figure.update_yaxes(gridcolor="#eef2f6", title_text="Price", row=1, col=1)
     figure.update_yaxes(gridcolor="#eef2f6", title_text="Volume", row=2, col=1)
     add_chart_side_labels(figure, price_labels)
-    st.plotly_chart(figure, width="stretch")
+    st.plotly_chart(figure, use_container_width=True)
     render_detected_patterns(patterns)
 
 
@@ -2073,6 +2238,97 @@ def render_critical_snapshot(
         st.warning(f"Screener critical data unavailable: {screener_data['error']}")
 
 
+def render_decision_readiness(
+    *,
+    quote: MarketQuote,
+    bars: list[HistoricalBar],
+    profile: dict[str, Any],
+    screener_data: dict[str, Any],
+    decision: Any,
+    settings: Settings,
+) -> None:
+    """Render a compact checklist that says whether analysis is decision-ready."""
+
+    technical = technical_analysis_summary(quote, bars)
+    quality = data_quality_summary(
+        quote,
+        bars,
+        profile,
+        gemini_active=gemini_enabled(settings),
+    )
+    screener_report = _screener_report_or_none(screener_data)
+
+    checks = [
+        {
+            "Check": "Fresh price data",
+            "Status": "PASS" if quality.status in {"Good", "Usable"} else "REVIEW",
+            "Why it matters": "Avoid acting on stale or incomplete candles.",
+            "Evidence": quality.status,
+        },
+        {
+            "Check": "Technical setup",
+            "Status": "PASS" if technical.bias in {"Bullish", "Constructive"} else "REVIEW",
+            "Why it matters": "Confirms trend, momentum and key levels before entry.",
+            "Evidence": f"{technical.bias}; support {_technical_item_value(technical, 'Support')}; resistance {_technical_item_value(technical, 'Resistance')}",
+        },
+        {
+            "Check": "Fundamental visibility",
+            "Status": "PASS" if screener_report and screener_report.ratios else "REVIEW",
+            "Why it matters": "Valuation, debt and return ratios should be visible before conviction.",
+            "Evidence": (
+                f"P/E {_screener_ratio(screener_report, 'Stock P/E', 'P/E')}; "
+                f"ROCE {_screener_ratio(screener_report, 'ROCE')}; "
+                f"D/E {_screener_ratio(screener_report, 'Debt to equity', 'Debt / Equity')}"
+            ),
+        },
+        {
+            "Check": "Shareholding trend",
+            "Status": "PASS" if _holding_value(screener_report, "Promoters") != "N/A" else "REVIEW",
+            "Why it matters": "Promoter/FII/DII visibility helps avoid weak ownership signals.",
+            "Evidence": (
+                f"Promoter {_holding_value(screener_report, 'Promoters')}; "
+                f"FII {_holding_value(screener_report, 'FIIs')}; "
+                f"DII {_holding_value(screener_report, 'DIIs')}"
+            ),
+        },
+        {
+            "Check": "Agent agreement",
+            "Status": "PASS" if getattr(decision, "confidence", 0.0) >= 0.6 else "REVIEW",
+            "Why it matters": "Higher confidence means agents are less conflicted.",
+            "Evidence": f"{getattr(decision, 'action', 'N/A')} at {getattr(decision, 'confidence', 0.0) * 100:.0f}% confidence",
+        },
+        {
+            "Check": "Missing critical inputs",
+            "Status": "PASS" if not quality.warnings and not screener_data.get("error") else "REVIEW",
+            "Why it matters": "Missing evidence should reduce position confidence.",
+            "Evidence": "; ".join(quality.warnings[:2]) if quality.warnings else "No major warning captured.",
+        },
+    ]
+
+    frame = pd.DataFrame(checks)
+    pass_count = int((frame["Status"] == "PASS").sum())
+    total_count = len(frame)
+    readiness = "Decision-ready" if pass_count >= 5 else "Needs review"
+    st.markdown(
+        """
+        <div class="natip-section">
+          <div class="natip-section-header">
+            <div>
+              <h2>Decision Readiness</h2>
+              <p>One checklist showing what is usable, what is missing, and where conviction should be reduced.</p>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    cols = st.columns(3)
+    cols[0].metric("Readiness", readiness)
+    cols[1].metric("Checks passed", f"{pass_count}/{total_count}")
+    cols[2].metric("Final action", getattr(decision, "action", "N/A"))
+    st.dataframe(frame, use_container_width=True, hide_index=True)
+
+
 def render_screener_fundamentals(report_data: dict[str, Any]) -> None:
     """Render Screener fundamentals in Fetch Analysis."""
 
@@ -2143,7 +2399,7 @@ def render_screener_fundamentals(report_data: dict[str, Any]) -> None:
                 frame = pd.DataFrame(report.tables[table_name])
                 st.dataframe(
                     style_fundamental_table(frame, table_name),
-                    width="stretch",
+                    use_container_width=True,
                     hide_index=True,
                 )
     if report.missing_data:
@@ -2739,6 +2995,49 @@ def _clear_fetch_analysis_state() -> None:
         st.session_state.pop(key, None)
 
 
+def get_or_run_fetch_decision(
+    *,
+    quote: MarketQuote,
+    bars: list[HistoricalBar],
+    profile: dict[str, Any],
+    sector: str,
+    settings: Settings,
+) -> Any:
+    """Return cached Fetch Analysis agent output, running agents only when required."""
+
+    selected_symbol = st.session_state["selected_symbol"]
+    decision_cache_key = (
+        selected_symbol,
+        gemini_enabled(settings),
+        gemini_key_fingerprint(settings),
+        gemini_model(settings),
+        gemini_rules(),
+    )
+    if (
+        "decision" not in st.session_state
+        or st.session_state.get("decision_symbol") != selected_symbol
+        or st.session_state.get("decision_cache_key") != decision_cache_key
+    ):
+        with st.spinner("Running agent reasoning after charts load..."):
+            st.session_state["decision"] = asyncio.run(
+                run_stock_agents(
+                    quote=quote,
+                    bars=bars,
+                    profile=profile,
+                    sector=str(sector),
+                    macro_context=[],
+                    gemini_api_key=(
+                        configured_gemini_api_key(settings) if gemini_enabled(settings) else None
+                    ),
+                    gemini_model=gemini_model(settings),
+                    gemini_rules=gemini_rules(),
+                )
+            )
+        st.session_state["decision_symbol"] = selected_symbol
+        st.session_state["decision_cache_key"] = decision_cache_key
+    return st.session_state["decision"]
+
+
 def render_single_stock_dashboard() -> None:
     """Render previous single-stock decision dashboard."""
 
@@ -2759,36 +3058,6 @@ def render_single_stock_dashboard() -> None:
     nifty_frame = bars_to_frame(nifty_bars)
     sector_frame = bars_to_frame(sector_bars)
     settings = get_settings()
-    decision_cache_key = (
-        selected_symbol,
-        gemini_enabled(settings),
-        gemini_key_fingerprint(settings),
-        gemini_model(settings),
-        gemini_rules(),
-    )
-    if (
-        "decision" not in st.session_state
-        or st.session_state.get("decision_symbol") != selected_symbol
-        or st.session_state.get("decision_cache_key") != decision_cache_key
-    ):
-        st.session_state["decision"] = asyncio.run(
-            run_stock_agents(
-                quote=quote,
-                bars=bars,
-                profile=profile,
-                sector=str(sector),
-                macro_context=[],
-                gemini_api_key=(
-                    configured_gemini_api_key(settings) if gemini_enabled(settings) else None
-                ),
-                gemini_model=gemini_model(settings),
-                gemini_rules=gemini_rules(),
-            )
-        )
-        st.session_state["decision_symbol"] = selected_symbol
-        st.session_state["decision_cache_key"] = decision_cache_key
-    decision = st.session_state["decision"]
-    signals = {signal.category: signal for signal in decision.signals}
 
     st.subheader(f"{selected_symbol} Decision Dashboard")
     (
@@ -2823,6 +3092,13 @@ def render_single_stock_dashboard() -> None:
             interval=selected_interval,
             error=st.session_state.get("sector_chart_error"),
         )
+        decision = get_or_run_fetch_decision(
+            quote=quote,
+            bars=bars,
+            profile=profile,
+            sector=str(sector),
+            settings=settings,
+        )
         render_critical_snapshot(
             quote=quote,
             bars=bars,
@@ -2831,6 +3107,16 @@ def render_single_stock_dashboard() -> None:
             decision=decision,
             settings=settings,
         )
+        render_decision_readiness(
+            quote=quote,
+            bars=bars,
+            profile=profile,
+            screener_data=screener_fundamentals,
+            decision=decision,
+            settings=settings,
+        )
+    decision = st.session_state["decision"]
+    signals = {signal.category: signal for signal in decision.signals}
 
     with fundamentals_tab:
         render_signal(signals.get("fundamentals"))
@@ -3066,7 +3352,7 @@ def render_nifty250_buy_scan() -> None:
     if display.empty:
         return
     display = _format_scan_display(display)
-    st.dataframe(display, width="stretch", hide_index=True)
+    st.dataframe(display, use_container_width=True, hide_index=True)
     st.caption(
         f"Universe: {result.get('universe_name', 'Nifty 250')} · "
         "saved latest scan to `outputs/nifty250_frozen_recommendations.csv`."
@@ -3234,7 +3520,7 @@ def render_prediction_result(prediction: dict[str, Any]) -> None:
     with st.expander("Supporting feature explanations", expanded=False):
         explanations = prediction.get("top_supporting_feature_explanations") or []
         if explanations:
-            st.dataframe(pd.DataFrame(explanations), width="stretch", hide_index=True)
+            st.dataframe(pd.DataFrame(explanations), use_container_width=True, hide_index=True)
         else:
             st.write("No feature-importance explanations were available from the frozen artifact.")
 
@@ -3268,7 +3554,7 @@ def render_frozen_debug(prediction: dict[str, Any] | None) -> None:
         }
         st.dataframe(
             pd.DataFrame([{"Item": key, "Value": value} for key, value in debug_rows.items()]),
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
         )
 
@@ -3393,7 +3679,7 @@ def render_stock_probability_tab() -> None:
     ]:
         if column in display.columns:
             display[column] = (pd.to_numeric(display[column], errors="coerce") * 100).round(2)
-    st.dataframe(display, width="stretch", hide_index=True)
+    st.dataframe(display, use_container_width=True, hide_index=True)
     st.caption(f"Latest saved output: `{SCREENER_OUTPUT}`")
 
 
@@ -3454,16 +3740,9 @@ def render_dual_listed_darvas_buy() -> None:
 
     with st.expander("Required production reference files", expanded=False):
         st.write("Place daily refreshed CSVs at these project-root paths:")
-        st.code(
-            "\n".join(
-                [
-                    str(DUAL_DARVAS_NSE_REFERENCE),
-                    str(DUAL_DARVAS_BSE_REFERENCE),
-                    str(DUAL_DARVAS_FO_REFERENCE),
-                ]
-            ),
-            language="text",
-        )
+        st.caption(f"NSE securities: {DUAL_DARVAS_NSE_REFERENCE}")
+        st.caption(f"BSE securities: {DUAL_DARVAS_BSE_REFERENCE}")
+        st.caption(f"NSE F&O stocks: {DUAL_DARVAS_FO_REFERENCE}")
         st.write(
             "NSE/BSE files need at least `symbol` and `isin`. Optional columns: "
             "`active`, `mainboard`, `series`, `instrument_type`, `surveillance`, "
@@ -3654,7 +3933,7 @@ def render_dual_listed_darvas_results(
             result.symbol,
             key=f"dual-darvas-result-symbol-{result.symbol}-{index}",
             help=f"Open {result.symbol} in Fetch Analysis",
-            width="stretch",
+            use_container_width=True,
         ):
             open_symbol_in_fetch_analysis(result.symbol)
         columns[1].write(result.decision.value)
@@ -3735,8 +4014,8 @@ def _render_dual_darvas_diagnostics(results: list[DualListedDarvasResult]) -> No
             ]
         )
         left, right = st.columns(2)
-        left.dataframe(reason_frame, width="stretch", hide_index=True)
-        right.dataframe(decision_frame, width="stretch", hide_index=True)
+        left.dataframe(reason_frame, use_container_width=True, hide_index=True)
+        right.dataframe(decision_frame, use_container_width=True, hide_index=True)
         st.write(
             "For this screener, `FO_STOCK_EXCLUDED` is intentional. Nifty 50 and many "
             "large-cap stocks will be rejected because the strategy is specifically "
@@ -4116,7 +4395,7 @@ def render_vcp_output_ranking_results(results: list[VcpScanResult]) -> None:
             result.symbol,
             key=f"vcp-ranking-symbol-{result.symbol}-{rank}",
             help=f"Open {result.company} in Fetch Analysis",
-            width="stretch",
+            use_container_width=True,
         ):
             open_symbol_in_fetch_analysis(result.symbol)
         row[2].write(f"{result.vcp_score:.1f}")
@@ -4328,7 +4607,7 @@ def render_vcp_pattern_scan_results(
             result.symbol,
             key=f"vcp-result-symbol-{result.symbol}-{index}",
             help=f"Open {result.company} in Fetch Analysis",
-            width="stretch",
+            use_container_width=True,
         ):
             open_symbol_in_fetch_analysis(result.symbol)
         columns[1].write(result.company)
@@ -4404,7 +4683,7 @@ def render_shareholding_scan_results(
             result.symbol,
             key=f"shareholding-result-symbol-{result.symbol}-{index}",
             help=f"Open {result.company} in Fetch Analysis",
-            width="stretch",
+            use_container_width=True,
         ):
             open_symbol_in_fetch_analysis(result.symbol)
         columns[1].write(result.company)
@@ -4471,7 +4750,7 @@ def _render_clickable_darvax_results_table(results: list[PatternScanResult]) -> 
             result.symbol,
             key=f"darvax-result-symbol-{result.symbol}-{index}",
             help=f"Open {result.company} in Fetch Analysis",
-            width="stretch",
+            use_container_width=True,
         ):
             open_symbol_in_fetch_analysis(result.symbol)
         columns[1].write(result.company)
@@ -4826,7 +5105,7 @@ def render_buying_recommendation_card(
             }
             for score in recommendation.agent_scores
         ]
-        st.dataframe(score_rows, width="stretch", hide_index=True)
+        st.dataframe(score_rows, use_container_width=True, hide_index=True)
 
         with st.expander("Agent-wise reasoning", expanded=False):
             for score in recommendation.agent_scores:
@@ -6091,15 +6370,17 @@ def render_sector_rotation_tab() -> None:
                     "color": [color_map.get(str(state), "#667085") for state in table["State"]],
                     "line": {"width": 1, "color": "#ffffff"},
                 },
-                customdata=table[["State", "20D vs Market", "Breadth50", "ΔBreadth10D"]],
+                customdata=table[
+                    ["Sector", "State", "20D vs Market", "Breadth50", "ΔBreadth10D"]
+                ],
                 hovertemplate=(
                     "<b>%{text}</b><br>"
                     "Leadership %{x:.1f}<br>"
                     "Rotation %{y:.1f}<br>"
-                    "State %{customdata[0]}<br>"
-                    "ER20 %{customdata[1]:.2%}<br>"
-                    "Breadth50 %{customdata[2]:.1f}%<br>"
-                    "Delta breadth %{customdata[3]:.1f} pp<extra></extra>"
+                    "State %{customdata[1]}<br>"
+                    "ER20 %{customdata[2]:.2%}<br>"
+                    "Breadth50 %{customdata[3]:.1f}%<br>"
+                    "Delta breadth %{customdata[4]:.1f} pp<extra></extra>"
                 ),
             )
         )
@@ -6113,7 +6394,19 @@ def render_sector_rotation_tab() -> None:
             plot_bgcolor="#ffffff",
             paper_bgcolor="#ffffff",
         )
-        st.plotly_chart(chart, width="stretch")
+        selection = st.plotly_chart(
+            chart,
+            use_container_width=True,
+            key="sector_rotation_map",
+            on_select="rerun",
+            selection_mode="points",
+        )
+        render_sector_rotation_contribution_drilldown(
+            table=table,
+            as_of=as_of,
+            plot_selection=selection,
+        )
+        render_sector_rotation_quadrant_contributors(table=table, as_of=as_of)
 
         st.markdown("### Daily Sector Table")
         display = table.copy()
@@ -6153,7 +6446,7 @@ def render_sector_rotation_tab() -> None:
         display["Persistence"] = pd.to_numeric(display["Persistence"], errors="coerce").map(
             lambda value: f"{int(value)}/5" if pd.notna(value) else ""
         )
-        st.dataframe(display, width="stretch", hide_index=True)
+        st.dataframe(display, use_container_width=True, hide_index=True)
 
         st.markdown("### Pass To Stock Selection")
         pass_table = table[table["Action"].eq("⭐ HUNT")].copy()
@@ -6172,7 +6465,7 @@ def render_sector_rotation_tab() -> None:
                         "Action",
                     ]
                 ],
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
             )
 
@@ -6190,6 +6483,448 @@ def render_sector_rotation_tab() -> None:
                 "effective_as_of_date": as_of,
             }
         )
+
+
+def render_sector_rotation_contribution_drilldown(
+    *,
+    table: pd.DataFrame,
+    as_of: str,
+    plot_selection: Any,
+) -> None:
+    """Render stock-level contribution drill-down for the selected sector."""
+
+    if table.empty or "Sector" not in table.columns:
+        return
+
+    st.markdown("### Stock Contribution Drill-down")
+    clicked_sector = _selected_sector_from_rotation_chart(plot_selection, table)
+    sectors = table["Sector"].dropna().astype(str).tolist()
+    if not sectors:
+        st.info("No sector rows are available for contribution drill-down.")
+        return
+    if clicked_sector in sectors:
+        st.session_state["sector_rotation_contribution_sector"] = clicked_sector
+    current_sector = st.session_state.get("sector_rotation_contribution_sector")
+    default_index = sectors.index(current_sector) if current_sector in sectors else 0
+    selected_sector = st.selectbox(
+        "Selected sector",
+        sectors,
+        index=default_index,
+        key="sector_rotation_contribution_sector",
+        help="Click a point on the rotation map, or choose a sector here.",
+    )
+    sector_row = table[table["Sector"].astype(str).eq(selected_sector)].head(1)
+    state = str(sector_row["State"].iloc[0]) if not sector_row.empty else "UNKNOWN"
+    st.caption(
+        f"Showing {selected_sector} constituents for {as_of}. "
+        "Contribution uses the same clean cache, benchmark, 20D/60D relative-strength inputs, "
+        "and RS acceleration used by Sector Rotation."
+    )
+
+    with st.spinner(f"Calculating {selected_sector} stock contributors..."):
+        contribution, trajectory = _cached_sector_contributions(selected_sector, as_of)
+    if contribution.empty:
+        st.warning(
+            f"No stock-level contribution rows were available for {selected_sector} on {as_of}. "
+            "This usually means missing clean cache rows or insufficient 20D/60D history."
+        )
+        return
+
+    positives = contribution[contribution["Contribution Direction"].eq("Positive")].copy()
+    negatives = contribution[contribution["Contribution Direction"].eq("Negative")].copy()
+    positives = positives.sort_values("Contribution Score", ascending=False).head(12)
+    negatives = negatives.sort_values("Contribution Score", ascending=True).head(12)
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Sector", selected_sector)
+    metric_cols[1].metric("State", state)
+    metric_cols[2].metric("Positive contributors", len(positives))
+    metric_cols[3].metric("Negative draggers", len(negatives))
+
+    st.markdown("#### Contribution Bar Chart")
+    chart_rows = pd.concat([positives.head(8), negatives.head(8)], ignore_index=True)
+    if chart_rows.empty:
+        st.info("Contribution scores are unavailable for charting.")
+    else:
+        chart_rows = chart_rows.sort_values("Contribution Score")
+        colors = [
+            "#00b386" if direction == "Positive" else "#ef4444"
+            for direction in chart_rows["Contribution Direction"]
+        ]
+        figure = go.Figure(
+            go.Bar(
+                x=chart_rows["Contribution Score"],
+                y=chart_rows["Ticker"],
+                orientation="h",
+                marker_color=colors,
+                customdata=chart_rows[["Company", "Contribution Direction"]],
+                hovertemplate=(
+                    "<b>%{y}</b><br>%{customdata[0]}<br>"
+                    "Direction: %{customdata[1]}<br>"
+                    "Contribution: %{x:.2%}<extra></extra>"
+                ),
+            )
+        )
+        figure.add_vline(x=0, line_dash="dot", line_color="#98a2b3")
+        figure.update_layout(
+            height=max(320, min(620, 28 * len(chart_rows) + 110)),
+            margin={"l": 20, "r": 20, "t": 10, "b": 20},
+            xaxis_title="Contribution Score",
+            yaxis_title="Stock",
+            plot_bgcolor="#ffffff",
+            paper_bgcolor="#ffffff",
+        )
+        st.plotly_chart(figure, use_container_width=True)
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown("#### Top Positive Contributors")
+        positive_selection = _render_contribution_table(
+            positives, key="sector_positive_contributors"
+        )
+    with right:
+        st.markdown("#### Top Negative Contributors / Draggers")
+        negative_selection = _render_contribution_table(
+            negatives, key="sector_negative_contributors"
+        )
+
+    available_tickers = contribution["Ticker"].dropna().astype(str).tolist()
+    if not available_tickers:
+        return
+    selected_from_table = positive_selection or negative_selection
+    default_stock_index = (
+        available_tickers.index(selected_from_table)
+        if selected_from_table in available_tickers
+        else 0
+    )
+    selected_ticker = st.selectbox(
+        "Stock RS / Momentum trajectory",
+        available_tickers,
+        index=default_stock_index,
+        key=f"sector_rotation_contribution_stock_{selected_sector}",
+        help="Pick a contributor to inspect its recent stock-level RS and momentum path.",
+    )
+    render_sector_stock_trajectory(trajectory, selected_ticker)
+
+
+def render_sector_rotation_quadrant_contributors(*, table: pd.DataFrame, as_of: str) -> None:
+    """Render stock contributors for Q1 and Q4 sectors on the rotation map."""
+
+    required = {"Sector", "State", "Leadership Score", "Rotation Score"}
+    if table.empty or not required.issubset(table.columns):
+        return
+
+    st.markdown("### Quadrant 1 & 4 Stock Contributors")
+    st.caption(
+        "Quadrants use the same map cutoffs shown on the graph: Leadership Score 55 and "
+        "Rotation Score 70. Q1 = high leadership + high rotation. Q4 = high leadership "
+        "with lower rotation, where leaders may be cooling or weakening."
+    )
+    quadrant_rows = _sector_quadrant_rows(table)
+    if quadrant_rows.empty:
+        st.info("No sectors currently fall in Quadrant 1 or Quadrant 4.")
+        return
+
+    selected_quadrants = st.multiselect(
+        "Quadrants to show",
+        options=["Q1", "Q4"],
+        default=["Q1", "Q4"],
+        format_func=lambda value: (
+            "Q1 · High leadership + high rotation"
+            if value == "Q1"
+            else "Q4 · High leadership + lower rotation"
+        ),
+        key="sector_rotation_quadrant_filter",
+    )
+    filtered_quadrants = quadrant_rows[quadrant_rows["Quadrant"].isin(selected_quadrants)].copy()
+    if filtered_quadrants.empty:
+        st.info("Select Q1 or Q4 to view contributor stocks.")
+        return
+
+    with st.spinner("Building Q1/Q4 stock contribution table..."):
+        contributor_rows = _quadrant_contributor_rows(filtered_quadrants, as_of)
+    if contributor_rows.empty:
+        st.warning(
+            "No Q1/Q4 contributor rows were available. This usually means missing stock cache "
+            "or insufficient 20D/60D history for the quadrant sectors."
+        )
+        return
+
+    summary = (
+        contributor_rows.groupby(["Quadrant", "Sector"], as_index=False)
+        .agg(
+            Stocks=("Ticker", "nunique"),
+            Positive=("Contribution Direction", lambda values: int((values == "Positive").sum())),
+            Negative=("Contribution Direction", lambda values: int((values == "Negative").sum())),
+            TopContribution=("Contribution Score", "max"),
+            BottomContribution=("Contribution Score", "min"),
+        )
+        .sort_values(["Quadrant", "TopContribution"], ascending=[True, False])
+    )
+    summary_display = summary.copy()
+    for column in ["TopContribution", "BottomContribution"]:
+        summary_display[column] = pd.to_numeric(summary_display[column], errors="coerce").map(
+            lambda value: f"{value:.2%}" if pd.notna(value) else ""
+        )
+    st.markdown("#### Quadrant Sector Summary")
+    st.dataframe(summary_display, use_container_width=True, hide_index=True)
+
+    positives = contributor_rows[contributor_rows["Contribution Direction"].eq("Positive")].copy()
+    negatives = contributor_rows[contributor_rows["Contribution Direction"].eq("Negative")].copy()
+    positives = positives.sort_values("Contribution Score", ascending=False).head(25)
+    negatives = negatives.sort_values("Contribution Score", ascending=True).head(25)
+
+    st.markdown("#### Q1/Q4 Positive Contributors")
+    _render_quadrant_contributor_table(positives, key="sector_q14_positive_contributors")
+
+    st.markdown("#### Q1/Q4 Negative Contributors / Draggers")
+    _render_quadrant_contributor_table(negatives, key="sector_q14_negative_contributors")
+
+    chart_rows = pd.concat([positives.head(12), negatives.head(12)], ignore_index=True)
+    if not chart_rows.empty:
+        chart_rows = chart_rows.sort_values("Contribution Score")
+        labels_for_chart = chart_rows["Ticker"] + " · " + chart_rows["Sector"]
+        colors = [
+            "#00b386" if direction == "Positive" else "#ef4444"
+            for direction in chart_rows["Contribution Direction"]
+        ]
+        figure = go.Figure(
+            go.Bar(
+                x=chart_rows["Contribution Score"],
+                y=labels_for_chart,
+                orientation="h",
+                marker_color=colors,
+                customdata=chart_rows[["Quadrant", "Company", "Contribution Direction"]],
+                hovertemplate=(
+                    "<b>%{y}</b><br>%{customdata[0]} · %{customdata[1]}<br>"
+                    "Direction: %{customdata[2]}<br>"
+                    "Contribution: %{x:.2%}<extra></extra>"
+                ),
+            )
+        )
+        figure.add_vline(x=0, line_dash="dot", line_color="#98a2b3")
+        figure.update_layout(
+            height=max(360, min(760, 27 * len(chart_rows) + 120)),
+            margin={"l": 20, "r": 20, "t": 10, "b": 20},
+            xaxis_title="Contribution Score",
+            yaxis_title="Stock · Sector",
+            plot_bgcolor="#ffffff",
+            paper_bgcolor="#ffffff",
+        )
+        st.plotly_chart(figure, use_container_width=True)
+
+
+def _sector_quadrant_rows(table: pd.DataFrame) -> pd.DataFrame:
+    """Return sectors in Q1 and Q4 using the visible sector-map cutoffs."""
+
+    frame = table.copy()
+    frame["Leadership Score"] = pd.to_numeric(frame["Leadership Score"], errors="coerce")
+    frame["Rotation Score"] = pd.to_numeric(frame["Rotation Score"], errors="coerce")
+    high_leadership = frame["Leadership Score"].ge(55)
+    high_rotation = frame["Rotation Score"].ge(70)
+    frame["Quadrant"] = ""
+    frame.loc[high_leadership & high_rotation, "Quadrant"] = "Q1"
+    frame.loc[high_leadership & ~high_rotation, "Quadrant"] = "Q4"
+    return frame[frame["Quadrant"].isin(["Q1", "Q4"])].copy()
+
+
+def _quadrant_contributor_rows(quadrant_rows: pd.DataFrame, as_of: str) -> pd.DataFrame:
+    """Build one stock-level contributor table for selected quadrant sectors."""
+
+    rows: list[pd.DataFrame] = []
+    for _index, sector_row in quadrant_rows.iterrows():
+        sector = str(sector_row["Sector"])
+        contribution, _trajectory = _cached_sector_contributions(sector, as_of)
+        if contribution.empty:
+            continue
+        contribution = contribution.copy()
+        contribution["Quadrant"] = str(sector_row["Quadrant"])
+        contribution["Sector State"] = str(sector_row["State"])
+        contribution["Sector Leadership Score"] = pd.to_numeric(
+            sector_row["Leadership Score"], errors="coerce"
+        )
+        contribution["Sector Rotation Score"] = pd.to_numeric(
+            sector_row["Rotation Score"], errors="coerce"
+        )
+        rows.append(contribution)
+    if not rows:
+        return pd.DataFrame()
+    return pd.concat(rows, ignore_index=True)
+
+
+def _render_quadrant_contributor_table(frame: pd.DataFrame, *, key: str) -> None:
+    """Render Q1/Q4 contributor rows with percentage formatting."""
+
+    if frame.empty:
+        st.info("No rows in this group.")
+        return
+    columns = [
+        "Quadrant",
+        "Sector",
+        "Sector State",
+        "Ticker",
+        "Company",
+        "Sector Leadership Score",
+        "Sector Rotation Score",
+        "Rank",
+        "RS 20D vs Market",
+        "RS 60D vs Market",
+        "Change in RS/Momentum",
+        "Contribution Score",
+        "Contribution Direction",
+    ]
+    display = frame[[column for column in columns if column in frame.columns]].copy()
+    for column in ["Sector Leadership Score", "Sector Rotation Score"]:
+        if column in display:
+            display[column] = pd.to_numeric(display[column], errors="coerce").round(2)
+    for column in [
+        "RS 20D vs Market",
+        "RS 60D vs Market",
+        "Change in RS/Momentum",
+        "Contribution Score",
+    ]:
+        if column in display:
+            display[column] = pd.to_numeric(display[column], errors="coerce").map(
+                lambda value: f"{value:.2%}" if pd.notna(value) else ""
+            )
+    st.dataframe(display, use_container_width=True, hide_index=True, key=key)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _cached_sector_contributions(sector: str, as_of: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Cached wrapper for sector constituent contribution calculation."""
+
+    return calculate_sector_stock_contributions(sector=sector, as_of_date=as_of)
+
+
+def _selected_sector_from_rotation_chart(plot_selection: Any, table: pd.DataFrame) -> str | None:
+    """Return the sector selected on the Plotly rotation chart, if any."""
+
+    try:
+        selection = getattr(plot_selection, "selection", None)
+        points = getattr(selection, "points", None) if selection is not None else None
+        if points is None and isinstance(plot_selection, dict):
+            points = plot_selection.get("selection", {}).get("points", [])
+        if not points:
+            return None
+        point = points[0]
+        if isinstance(point, dict):
+            customdata = point.get("customdata")
+            if customdata:
+                return str(customdata[0])
+            point_index = point.get("point_index", point.get("pointIndex"))
+        else:
+            customdata = getattr(point, "customdata", None)
+            if customdata:
+                return str(customdata[0])
+            point_index = getattr(point, "point_index", None)
+        if point_index is not None:
+            return str(table.iloc[int(point_index)]["Sector"])
+    except Exception:
+        return None
+    return None
+
+
+def _render_contribution_table(frame: pd.DataFrame, *, key: str) -> str | None:
+    """Render a compact contribution table with formatted percentage fields."""
+
+    if frame.empty:
+        st.info("No rows in this group.")
+        return None
+    display = frame[
+        [
+            "Rank",
+            "Ticker",
+            "Company",
+            "RS 20D vs Market",
+            "RS 60D vs Market",
+            "RS Momentum 20D",
+            "Change in RS/Momentum",
+            "Change in Price Momentum",
+            "Contribution Score",
+            "Contribution Direction",
+        ]
+    ].copy()
+    for column in [
+        "RS 20D vs Market",
+        "RS 60D vs Market",
+        "RS Momentum 20D",
+        "Change in RS/Momentum",
+        "Change in Price Momentum",
+        "Contribution Score",
+    ]:
+        display[column] = pd.to_numeric(display[column], errors="coerce").map(
+            lambda value: f"{value:.2%}" if pd.notna(value) else ""
+        )
+    selected = st.dataframe(
+        display,
+        use_container_width=True,
+        hide_index=True,
+        key=key,
+        on_select="rerun",
+        selection_mode="single-row",
+    )
+    try:
+        selected_rows = selected.selection.rows
+        if selected_rows:
+            return str(frame.iloc[int(selected_rows[0])]["Ticker"])
+    except Exception:
+        return None
+    return None
+
+
+def render_sector_stock_trajectory(trajectory: pd.DataFrame, ticker: str) -> None:
+    """Render one stock's recent RS and contribution trajectory."""
+
+    if trajectory.empty:
+        st.info("No trajectory data is available.")
+        return
+    stock = trajectory[trajectory["Ticker"].astype(str).eq(str(ticker))].copy()
+    if stock.empty:
+        st.info(f"No trajectory data is available for {ticker}.")
+        return
+    stock = stock.sort_values("Date").tail(90)
+    company = str(stock["Company"].dropna().iloc[-1]) if stock["Company"].notna().any() else ticker
+    figure = go.Figure()
+    figure.add_trace(
+        go.Scatter(
+            x=stock["Date"],
+            y=stock["RS 20D vs Market"],
+            mode="lines",
+            name="RS 20D vs Market",
+            line={"color": "#2563eb", "width": 2},
+        )
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=stock["Date"],
+            y=stock["Change in RS/Momentum"],
+            mode="lines",
+            name="Change in RS/Momentum",
+            line={"color": "#00b386", "width": 2},
+        )
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=stock["Date"],
+            y=stock["Contribution Score"],
+            mode="lines",
+            name="Contribution Score",
+            line={"color": "#f59e0b", "width": 2},
+        )
+    )
+    figure.add_hline(y=0, line_dash="dot", line_color="#98a2b3")
+    figure.update_layout(
+        title=f"{ticker} · {company}",
+        height=360,
+        margin={"l": 20, "r": 20, "t": 45, "b": 20},
+        yaxis_tickformat=".1%",
+        xaxis_title="Date",
+        yaxis_title="Relative value",
+        plot_bgcolor="#ffffff",
+        paper_bgcolor="#ffffff",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
+    )
+    st.plotly_chart(figure, use_container_width=True)
 
 
 def _normalize_sector_rotation_as_of_date(value: str) -> str | None:
@@ -6392,12 +7127,12 @@ def render_astro_research_tab(settings: Settings) -> None:
             st.markdown("#### Astrological Influence Interpretation")
             st.dataframe(
                 _astro_influence_table(result, evidence),
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
             )
             st.dataframe(
                 pd.DataFrame([{"Field": key, "Value": value} for key, value in evidence.items()]),
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
             )
         feature_payload = _load_latest_astro_feature_payload(feature_store_path)
@@ -6406,20 +7141,20 @@ def render_astro_research_tab(settings: Settings) -> None:
             with detail_tabs[0]:
                 positions = feature_payload.get("planet_positions") or []
                 if positions:
-                    st.dataframe(pd.DataFrame(positions), width="stretch", hide_index=True)
+                    st.dataframe(pd.DataFrame(positions), use_container_width=True, hide_index=True)
                 else:
                     st.info("No planet-position rows are available in the latest feature payload.")
             with detail_tabs[1]:
                 aspects = feature_payload.get("aspect_distances") or []
                 if aspects:
                     aspect_frame = pd.DataFrame(aspects).sort_values("distance_deg").head(25)
-                    st.dataframe(aspect_frame, width="stretch", hide_index=True)
+                    st.dataframe(aspect_frame, use_container_width=True, hide_index=True)
                 else:
                     st.info("No aspect-distance rows are available in the latest feature payload.")
             with detail_tabs[2]:
                 ingress = feature_payload.get("ingress_events") or []
                 if ingress:
-                    st.dataframe(pd.DataFrame(ingress), width="stretch", hide_index=True)
+                    st.dataframe(pd.DataFrame(ingress), use_container_width=True, hide_index=True)
                 else:
                     st.info("No ingress events are available in the latest feature payload.")
             with detail_tabs[3]:
@@ -6432,7 +7167,7 @@ def render_astro_research_tab(settings: Settings) -> None:
                     }
                     for key, value in feature_payload.items()
                 ]
-                st.dataframe(pd.DataFrame(raw_rows), width="stretch", hide_index=True)
+                st.dataframe(pd.DataFrame(raw_rows), use_container_width=True, hide_index=True)
 
     st.markdown("### Astro-Market Research Notes")
     st.caption(
@@ -6505,20 +7240,20 @@ def render_astro_research_tab(settings: Settings) -> None:
             ]
         )
         with report_tabs[0]:
-            st.dataframe(pd.DataFrame(report.planetary_data), width="stretch", hide_index=True)
+            st.dataframe(pd.DataFrame(report.planetary_data), use_container_width=True, hide_index=True)
         with report_tabs[1]:
-            st.dataframe(pd.DataFrame(report.event_table), width="stretch", hide_index=True)
+            st.dataframe(pd.DataFrame(report.event_table), use_container_width=True, hide_index=True)
         with report_tabs[2]:
-            st.dataframe(pd.DataFrame(report.sector_watchlist), width="stretch", hide_index=True)
+            st.dataframe(pd.DataFrame(report.sector_watchlist), use_container_width=True, hide_index=True)
         with report_tabs[3]:
-            st.dataframe(pd.DataFrame(report.important_windows), width="stretch", hide_index=True)
+            st.dataframe(pd.DataFrame(report.important_windows), use_container_width=True, hide_index=True)
         with report_tabs[4]:
             for note in report.market_notes:
                 st.write(note)
         with report_tabs[5]:
             natip_records = getattr(report, "natip_records", [])
             if natip_records:
-                st.dataframe(pd.DataFrame(natip_records), width="stretch", hide_index=True)
+                st.dataframe(pd.DataFrame(natip_records), use_container_width=True, hide_index=True)
             else:
                 st.info("No NATIP-compatible astro records were generated for this period.")
         with report_tabs[6]:
@@ -6532,7 +7267,7 @@ def render_astro_research_tab(settings: Settings) -> None:
         if rows.empty:
             st.info("No astro feature rows stored yet.")
         else:
-            st.dataframe(rows, width="stretch", hide_index=True)
+            st.dataframe(rows, use_container_width=True, hide_index=True)
 
 
 def render_astro_chart_reaction_screener(settings: Settings) -> None:
@@ -6735,7 +7470,7 @@ def render_past_astro_chart_reaction_scanner(settings: Settings) -> None:
         filtered = display[display["Working?"].eq("YES")][columns]
         all_rows = display[columns]
         st.metric("Events checked", len(scan.get("events") or []))
-        st.dataframe(filtered if not filtered.empty else all_rows, width="stretch", hide_index=True)
+        st.dataframe(filtered if not filtered.empty else all_rows, use_container_width=True, hide_index=True)
         if filtered.empty:
             st.caption("No rows met the current minimum score, so all scored rows are shown.")
         else:
@@ -6746,7 +7481,7 @@ def render_past_astro_chart_reaction_scanner(settings: Settings) -> None:
         with st.expander("Skipped / unavailable symbols", expanded=False):
             st.dataframe(
                 error_frame[["symbol", "company", "error"]],
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
             )
 
@@ -6872,7 +7607,7 @@ def render_future_astro_trend_watchlist(settings: Settings) -> None:
                 ).dt.date
             st.dataframe(
                 display_events[[column for column in ["timestamp", "priority", "event", "interpretation"] if column in display_events.columns]],
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
             )
 
@@ -6935,7 +7670,7 @@ def render_future_astro_trend_watchlist(settings: Settings) -> None:
         columns = [column for column in columns if column in display.columns]
         filtered = display[display["Watch?"].eq("YES")][columns]
         st.metric("Upcoming windows checked", len(scan.get("events") or []))
-        st.dataframe(filtered if not filtered.empty else display[columns], width="stretch", hide_index=True)
+        st.dataframe(filtered if not filtered.empty else display[columns], use_container_width=True, hide_index=True)
         if filtered.empty:
             st.caption("No rows met the selected watch score, so all scored rows are shown.")
         else:
@@ -6946,7 +7681,7 @@ def render_future_astro_trend_watchlist(settings: Settings) -> None:
         with st.expander("Skipped / unavailable symbols", expanded=False):
             st.dataframe(
                 error_frame[["symbol", "company", "error"]],
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
             )
 
@@ -7022,7 +7757,7 @@ def _render_past_astro_scan_table(
         columns = [column for column in columns if column in display.columns]
         filtered = display[display["Working?"].eq("YES")][columns]
         st.metric("Events checked", len(scan.get("events") or []))
-        st.dataframe(filtered if not filtered.empty else display[columns], width="stretch", hide_index=True)
+        st.dataframe(filtered if not filtered.empty else display[columns], use_container_width=True, hide_index=True)
         if filtered.empty:
             st.caption("No rows met the current minimum score, so all scored rows are shown.")
         else:
@@ -7033,7 +7768,7 @@ def _render_past_astro_scan_table(
         with st.expander("Skipped / unavailable symbols", expanded=False):
             st.dataframe(
                 error_frame[["symbol", "company", "error"]],
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
             )
 
@@ -7069,7 +7804,7 @@ def _render_future_astro_scan_table(
                 for column in ["timestamp", "priority", "event", "interpretation"]
                 if column in display_events.columns
             ]
-            st.dataframe(display_events[event_columns], width="stretch", hide_index=True)
+            st.dataframe(display_events[event_columns], use_container_width=True, hide_index=True)
 
     matched_frame = pd.DataFrame(scan.get("matched") or [])
     if matched_frame.empty:
@@ -7130,7 +7865,7 @@ def _render_future_astro_scan_table(
         columns = [column for column in columns if column in display.columns]
         filtered = display[display["Watch?"].eq("YES")][columns]
         st.metric("Upcoming windows checked", len(scan.get("events") or []))
-        st.dataframe(filtered if not filtered.empty else display[columns], width="stretch", hide_index=True)
+        st.dataframe(filtered if not filtered.empty else display[columns], use_container_width=True, hide_index=True)
         if filtered.empty:
             st.caption("No rows met the selected watch score, so all scored rows are shown.")
         else:
@@ -7141,7 +7876,7 @@ def _render_future_astro_scan_table(
         with st.expander("Skipped / unavailable symbols", expanded=False):
             st.dataframe(
                 error_frame[["symbol", "company", "error"]],
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
             )
 
@@ -7611,10 +8346,9 @@ def render_promoter_linkage() -> None:
         st.caption(
             "Use the XBRL/iXBRL file link from NSE Corporate Filings → Shareholding Pattern."
         )
-        st.code(
+        st.caption(
             "https://nsearchives.nseindia.com/corporate/ixbrl/"
-            "SHP_SDD_3160_03072025190315_iXBRL_WEB.html",
-            language="text",
+            "SHP_SDD_3160_03072025190315_iXBRL_WEB.html"
         )
     elif search_mode == "Promoter name":
         promoter_cols = st.columns([2, 1])
@@ -7814,7 +8548,7 @@ def render_promoter_graph(report: dict[str, Any]) -> None:
         plot_bgcolor="#ffffff",
         showlegend=False,
     )
-    st.plotly_chart(figure, width="stretch")
+    st.plotly_chart(figure, use_container_width=True)
 
 
 def render_promoter_tables(report: dict[str, Any]) -> None:
@@ -7826,7 +8560,7 @@ def render_promoter_tables(report: dict[str, Any]) -> None:
         st.dataframe(
             [{"Type": "Promoter", "Name": name} for name in report.get("promoter_names", [])]
             + [{"Type": "Director", "Name": name} for name in report.get("directors", [])],
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
         )
         st.markdown("### Pledge")
@@ -7844,7 +8578,7 @@ def render_promoter_tables(report: dict[str, Any]) -> None:
                 }
                 for item in report.get("promoter_investments", [])
             ],
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
         )
         st.markdown("### Major Promoter Shareholding Changes")
@@ -7852,7 +8586,7 @@ def render_promoter_tables(report: dict[str, Any]) -> None:
             st.write(change)
 
     st.markdown("### Promoter Shareholding History")
-    st.dataframe(report.get("shareholding_history", []), width="stretch", hide_index=True)
+    st.dataframe(report.get("shareholding_history", []), use_container_width=True, hide_index=True)
     if report.get("missing_data"):
         with st.expander("Missing or not visible on Screener page", expanded=False):
             for item in report["missing_data"]:
@@ -7982,6 +8716,7 @@ def render_raw_material_overview(service: RawMaterialImpactService) -> None:
     if watchlist.empty:
         _render_empty_state("No raw-material watchlist rows", "Add mappings and refresh material prices.")
         return
+    render_raw_material_pressure_summary(watchlist)
     filters = st.columns([1, 1, 1, 1])
     sector_filter = filters[0].multiselect(
         "Sector",
@@ -7989,8 +8724,8 @@ def render_raw_material_overview(service: RawMaterialImpactService) -> None:
         default=[],
     )
     direction_filter = filters[1].multiselect(
-        "Impact",
-        options=sorted(watchlist["Expected Margin Direction"].dropna().unique()),
+        "Margin pressure",
+        options=sorted(watchlist["Margin Pressure"].dropna().unique()),
         default=[],
     )
     min_confidence = filters[2].slider("Min confidence", 0, 100, 0, step=5)
@@ -7999,12 +8734,93 @@ def render_raw_material_overview(service: RawMaterialImpactService) -> None:
     if sector_filter:
         display = display[display["Sector"].isin(sector_filter)]
     if direction_filter:
-        display = display[display["Expected Margin Direction"].isin(direction_filter)]
+        display = display[display["Margin Pressure"].isin(direction_filter)]
     display = display[
         display["Evidence Confidence Score"].fillna(0).ge(min_confidence)
         & display["Impact Severity Score"].fillna(0).ge(min_severity)
     ]
-    st.dataframe(display, width="stretch", hide_index=True)
+    visible_columns = [
+        "Stock Symbol",
+        "Company Name",
+        "Sector",
+        "Raw Material",
+        "Exposure Type",
+        "Current Price",
+        "Currency",
+        "7D Change",
+        "30D Change",
+        "90D Change",
+        "30D INR Move",
+        "20D Volatility",
+        "Trend Regime",
+        "Volatility Regime",
+        "Margin Pressure",
+        "Impact Severity Score",
+        "Evidence Confidence Score",
+        "Action",
+        "Key Read",
+        "Missing Critical Inputs",
+        "Verification",
+        "Last Updated",
+    ]
+    st.dataframe(
+        display[[column for column in visible_columns if column in display.columns]],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def render_raw_material_pressure_summary(watchlist: pd.DataFrame) -> None:
+    """Render a material-level summary for faster analysis."""
+
+    if watchlist.empty:
+        return
+    rows: list[dict[str, Any]] = []
+    for material, group in watchlist.groupby("Raw Material", dropna=False):
+        exposed = group["Stock Symbol"].nunique()
+        latest = group.iloc[0]
+        pressures = group["Margin Pressure"].astype(str)
+        headwinds = int(pressures.str.contains("headwind|pressure", case=False, regex=True).sum())
+        tailwinds = int(pressures.str.contains("tailwind", case=False, regex=True).sum())
+        rows.append(
+            {
+                "Raw Material": material,
+                "Exposed Stocks": exposed,
+                "30D INR Move": latest.get("30D INR Move", "Data unavailable"),
+                "90D Change": latest.get("90D Change", "Data unavailable"),
+                "Volatility": latest.get("Volatility Regime", "Data unavailable"),
+                "Main Read": _material_summary_read(headwinds, tailwinds, exposed),
+                "Action": _material_summary_action(latest.get("Trend Regime"), latest.get("Volatility Regime"), headwinds),
+            }
+        )
+    st.markdown("### Material Pressure Summary")
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def _material_summary_read(headwinds: int, tailwinds: int, exposed: int) -> str:
+    """Return material-level exposure summary."""
+
+    if exposed <= 0:
+        return "No mapped exposure"
+    if headwinds > tailwinds:
+        return f"More potential headwinds ({headwinds}/{exposed})"
+    if tailwinds > headwinds:
+        return f"More potential tailwinds ({tailwinds}/{exposed})"
+    return "Mixed/neutral mapped exposure"
+
+
+def _material_summary_action(trend: Any, volatility: Any, headwinds: int) -> str:
+    """Return material-level workflow action."""
+
+    trend_text = str(trend)
+    vol_text = str(volatility)
+    if "Strong rise" in trend_text and headwinds:
+        return "Check margin risk now"
+    if vol_text in {"High", "Elevated"}:
+        return "Watch volatility"
+    if "Strong fall" in trend_text:
+        return "Check tailwind beneficiaries"
+    return "Monitor"
 
 
 def render_raw_material_stock_detail(service: RawMaterialImpactService) -> None:
@@ -8021,17 +8837,21 @@ def render_raw_material_stock_detail(service: RawMaterialImpactService) -> None:
     rows = [
         {
             "Raw Material": row.raw_material_name,
-            "Relationship": row.relationship.value,
-            "Direction": row.expected_margin_direction.value,
-            "Margin Impact bps": row.estimated_ebitda_margin_impact_bps,
+            "Exposure Type": row.relationship.value,
+            "30D INR Move": _pct_display(row.inr_adjusted_change_30d),
+            "90D Change": _pct_display(row.change_90d),
+            "20D Volatility": _pct_display(row.volatility_20d),
+            "Trend Regime": _raw_material_trend_label(row.inr_adjusted_change_30d, row.change_90d),
+            "Margin Pressure": _raw_material_margin_pressure(row),
             "Severity": row.impact_severity_score,
             "Confidence": row.evidence_confidence_score,
-            "Transmission Lag": row.expected_transmission_lag or "Data unavailable",
-            "Missing Data": "; ".join(row.missing_data) if row.missing_data else "None",
+            "Action": _raw_material_action(row),
+            "Key Read": _raw_material_key_read(row),
+            "Missing Critical Inputs": _raw_material_missing_summary(row.missing_data),
         }
         for row in output.materials
     ]
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
     st.markdown("### Impact Interpretation")
     st.write(output.conditional_conclusion)
     with st.expander("Evidence and counter-thesis", expanded=True):
@@ -8080,7 +8900,7 @@ def render_raw_material_indexed_chart(
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
     )
-    st.plotly_chart(figure, width="stretch")
+    st.plotly_chart(figure, use_container_width=True)
     st.caption("Stock, sector and Nifty overlay can be added once aligned clean cache series are available.")
 
 
@@ -8092,7 +8912,7 @@ def render_raw_material_tracker(service: RawMaterialImpactService) -> None:
     for material in materials:
         history = service.store.price_history(material.raw_material_id)
         rows.append(raw_material_tracker_row(material, history))
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 def render_raw_material_history(service: RawMaterialImpactService) -> None:
@@ -8102,7 +8922,7 @@ def render_raw_material_history(service: RawMaterialImpactService) -> None:
     if frame.empty:
         _render_empty_state("No impact history", "Run refresh and add verified mappings.")
         return
-    st.dataframe(frame, width="stretch", hide_index=True)
+    st.dataframe(frame, use_container_width=True, hide_index=True)
 
 
 def render_raw_material_alerts(service: RawMaterialImpactService) -> None:
@@ -8116,7 +8936,7 @@ def render_raw_material_alerts(service: RawMaterialImpactService) -> None:
     if alerts.empty:
         _render_empty_state("No active raw-material alerts", "Current rows are low confidence or insufficient data.")
     else:
-        st.dataframe(alerts, width="stretch", hide_index=True)
+        st.dataframe(alerts, use_container_width=True, hide_index=True)
 
 
 def render_company_material_mapping(service: RawMaterialImpactService) -> None:
@@ -8128,7 +8948,7 @@ def render_company_material_mapping(service: RawMaterialImpactService) -> None:
         _render_empty_state("No company-material mappings", "Seed templates were not found.")
         return
     st.caption("Use this table as a controlled mapping workspace. Only mark Verified after filing evidence is added.")
-    st.data_editor(frame, width="stretch", hide_index=True, disabled=False, key="raw_material_mapping_editor")
+    st.data_editor(frame, use_container_width=True, hide_index=True, disabled=False, key="raw_material_mapping_editor")
     st.info("Persistence for edited rows is available through the protected API endpoint with `X-NATIP-Role: admin`.")
 
 
@@ -8144,6 +8964,7 @@ def render_raw_material_quality(service: RawMaterialImpactService) -> None:
             & (watchlist["Raw Material"] == mapping.raw_material_name)
         ]
         missing = matching["Missing Data"].iloc[0] if not matching.empty else "Impact row unavailable"
+        has_missing = bool(str(missing).strip()) and str(missing).strip().casefold() not in {"none", "nan"}
         rows.append(
             {
                 "Symbol": mapping.symbol,
@@ -8151,10 +8972,10 @@ def render_raw_material_quality(service: RawMaterialImpactService) -> None:
                 "Verification Status": mapping.verification_status.value,
                 "Confidence": mapping.confidence if mapping.confidence is not None else "Data unavailable",
                 "Missing Data": missing,
-                "Status": "PASS" if mapping.verification_status.value == "Verified" and not missing else "REVIEW",
+                "Status": "PASS" if mapping.verification_status.value == "Verified" and not has_missing else "REVIEW",
             }
         )
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 def raw_material_watchlist_frame(service: RawMaterialImpactService) -> pd.DataFrame:
@@ -8168,41 +8989,136 @@ def raw_material_watchlist_frame(service: RawMaterialImpactService) -> pd.DataFr
                 "Company Name": row.company_name,
                 "Sector": row.sector,
                 "Raw Material": row.raw_material_name,
-                "Company Relationship": row.relationship.value,
-                "Input-Cost Share": _ratio_display(row.input_cost_share),
-                "Material Spend % Revenue": _ratio_display(row.material_spend_pct_revenue),
-                "Import Dependency": _ratio_display(row.import_dependency),
-                "Major Source Country": ", ".join(row.source_countries) if row.source_countries else "Data unavailable",
-                "Current Price": row.current_price,
+                "Exposure Type": row.relationship.value,
+                "Current Price": _raw_material_price_display(row.current_price, row.currency, row.unit),
                 "Currency": row.currency,
                 "Unit": row.unit,
-                "1D Change": _pct_display(row.change_1d),
                 "7D Change": _pct_display(row.change_7d),
                 "30D Change": _pct_display(row.change_30d),
                 "90D Change": _pct_display(row.change_90d),
-                "INR-Adjusted Change": _pct_display(row.inr_adjusted_change_30d),
-                "Raw-Material Volatility": _pct_display(row.volatility_20d),
-                "Hedge Coverage": _ratio_display(row.hedge_ratio),
-                "Inventory Days": row.inventory_days if row.inventory_days is not None else "Data unavailable",
-                "Pass-Through Ability": _ratio_display(row.pass_through_ratio),
-                "Expected Margin Direction": row.expected_margin_direction.value,
-                "Estimated EBITDA-Margin Impact bps": row.estimated_ebitda_margin_impact_bps,
-                "Historical Stock Sensitivity": row.historical_stock_sensitivity
-                if row.historical_stock_sensitivity is not None
-                else "Insufficient historical events to estimate probability",
-                "Expected Transmission Lag": row.expected_transmission_lag or "Data unavailable",
+                "30D INR Move": _pct_display(row.inr_adjusted_change_30d),
+                "20D Volatility": _pct_display(row.volatility_20d),
+                "Trend Regime": _raw_material_trend_label(row.inr_adjusted_change_30d, row.change_90d),
+                "Volatility Regime": _raw_material_volatility_label(row.volatility_20d),
+                "Margin Pressure": _raw_material_margin_pressure(row),
                 "Impact Severity Score": row.impact_severity_score,
                 "Evidence Confidence Score": row.evidence_confidence_score,
+                "Action": _raw_material_action(row),
+                "Key Read": _raw_material_key_read(row),
+                "Missing Critical Inputs": _raw_material_missing_summary(row.missing_data),
                 "Alert Status": row.alert_status,
-                "Verification Status": row.verification_status.value,
-                "Data Source": row.data_source,
-                "Last Updated Time": row.last_updated.isoformat(),
+                "Verification": row.verification_status.value,
+                "Last Updated": row.last_updated.strftime("%d %b %Y"),
                 "Missing Data": "; ".join(row.missing_data),
                 "Reasons": "; ".join(row.reasons),
             }
             for row in rows
         ]
     )
+
+
+def _raw_material_trend_label(change_30d: float | None, change_90d: float | None) -> str:
+    """Classify commodity/currency trend from available price changes."""
+
+    if change_30d is None and change_90d is None:
+        return "Data unavailable"
+    short = change_30d or 0.0
+    medium = change_90d or 0.0
+    if short >= 0.10 and medium >= 0:
+        return "Strong rise"
+    if short <= -0.10 and medium <= 0:
+        return "Strong fall"
+    if short >= 0.04:
+        return "Rising"
+    if short <= -0.04:
+        return "Falling"
+    return "Sideways"
+
+
+def _raw_material_price_display(price: float | None, currency: str, unit: str) -> str:
+    """Return a consistent text display for raw-material prices."""
+
+    if price is None or not math.isfinite(float(price)):
+        return "Data unavailable"
+    return f"{float(price):,.2f} {currency}/{unit}"
+
+
+def _raw_material_volatility_label(volatility: float | None) -> str:
+    """Classify raw-material volatility into useful buckets."""
+
+    if volatility is None:
+        return "Data unavailable"
+    if volatility >= 0.40:
+        return "High"
+    if volatility >= 0.22:
+        return "Elevated"
+    return "Normal"
+
+
+def _raw_material_margin_pressure(row: Any) -> str:
+    """Summarize likely margin pressure/tailwind from price move and exposure."""
+
+    if row.inr_adjusted_change_30d is None:
+        return "Cannot assess"
+    change = row.inr_adjusted_change_30d
+    if row.relationship.value == "Consumer":
+        if change >= 0.08:
+            return "Input-cost headwind"
+        if change <= -0.08:
+            return "Input-cost tailwind"
+    if row.relationship.value == "Producer":
+        if change >= 0.08:
+            return "Realization tailwind"
+        if change <= -0.08:
+            return "Realization headwind"
+    if row.relationship.value == "Integrated":
+        if abs(change) >= 0.08:
+            return "Mixed, verify net exposure"
+    return "Low/neutral near-term impact"
+
+
+def _raw_material_action(row: Any) -> str:
+    """Return a compact action label for analyst workflow."""
+
+    if row.current_price is None or row.inr_adjusted_change_30d is None:
+        return "Need price data"
+    if row.verification_status.value != "Verified":
+        if row.impact_severity_score is not None and row.impact_severity_score >= 20:
+            return "Verify exposure"
+        return "Monitor"
+    if row.impact_severity_score is not None and row.impact_severity_score >= 35:
+        return "Review margins"
+    return "Monitor"
+
+
+def _raw_material_key_read(row: Any) -> str:
+    """Return one concise evidence sentence for a raw-material row."""
+
+    move = _pct_display(row.inr_adjusted_change_30d)
+    vol = _raw_material_volatility_label(row.volatility_20d)
+    pressure = _raw_material_margin_pressure(row)
+    return f"{move} 30D INR move; {vol.lower()} volatility; {pressure.lower()}."
+
+
+def _raw_material_missing_summary(missing: list[str]) -> str:
+    """Summarize missing inputs without cluttering the main table."""
+
+    if not missing:
+        return "None"
+    high_value = [
+        item
+        for item in missing
+        if item
+        in {
+            "Material spend as % of revenue",
+            "Import dependency",
+            "Hedge ratio",
+            "Inventory days",
+            "Pass-through ratio",
+            "Evidence source",
+        }
+    ]
+    return f"{len(high_value)} key inputs missing"
 
 
 def raw_material_tracker_row(material: Any, history: pd.DataFrame) -> dict[str, Any]:
@@ -8223,7 +9139,6 @@ def raw_material_tracker_row(material: Any, history: pd.DataFrame) -> dict[str, 
         "Current Price": current_price if current_price is not None else "Data unavailable",
         "Unit": material.unit,
         "Original Currency": material.original_currency,
-        "INR-Converted Price": "Data unavailable",
         "1D Change": _pct_display(pct_change_from_history(clean, 1)),
         "7D Change": _pct_display(pct_change_from_history(clean, 7)),
         "30D Change": _pct_display(pct_change_from_history(clean, 30)),
@@ -8233,6 +9148,7 @@ def raw_material_tracker_row(material: Any, history: pd.DataFrame) -> dict[str, 
         "52W High": high_52w if high_52w is not None else "Data unavailable",
         "52W Low": low_52w if low_52w is not None else "Data unavailable",
         "Trend": trend,
+        "Volatility Regime": _raw_material_volatility_label(_volatility_from_history(clean, 20)),
         "Price Shock Status": "Review" if abs(change_20 or 0) > 0.15 else "Normal",
         "Related Sectors": ", ".join(material.related_sectors),
         "Data Source": material.source,
@@ -8279,41 +9195,32 @@ def _ratio_display(value: float | None) -> str:
 
 
 APP_NAVIGATION = [
-    "Home",
-    "Markets",
     "Opportunities",
     "Fetch Analysis",
     "Buying Agent",
+    "Quarterly Results",
     "Options Buying",
     "Stock Probability %",
     "Sector Rotation",
     "Raw Material Impact",
     "Astro Research",
-    "Promoter Linkage",
-    "Watchlist",
-    "Portfolio",
-    "Paper Trades",
-    "Strategies",
-    "Backtesting",
-    "Decision History",
-    "System Health",
-    "Settings",
 ]
 
 
 def render_app_header() -> str:
     """Render global NATIP shell header."""
 
-    header_cols = st.columns([2.4, 2.8, 1.1])
+    st.markdown('<div class="groww-shell">', unsafe_allow_html=True)
+    header_cols = st.columns([2.2, 3.6, 1.0])
     with header_cols[0]:
         st.markdown(
             """
-            <div class="natip-compact-header">
-              <div class="natip-brand">
-                <div class="natip-logo">N</div>
+            <div class="groww-topbar" style="border-bottom:0;margin-bottom:0;padding-bottom:4px;">
+              <div style="display:flex;align-items:center;gap:10px;">
+                <div class="groww-brand-mark">N</div>
                 <div>
-                  <h1>NATIP</h1>
-                  <p>Decision support · no live orders</p>
+                  <div class="groww-brand-title">NATIP</div>
+                  <div class="groww-brand-subtitle">NSE intelligence platform</div>
                 </div>
               </div>
             </div>
@@ -8322,15 +9229,20 @@ def render_app_header() -> str:
         )
     with header_cols[1]:
         selected = st.selectbox(
-            "Search",
+            "Search stocks",
             options=[""] + labels(),
             index=0,
-            placeholder="Search RELIANCE, TCS, Nifty...",
+            placeholder="Search RELIANCE, TCS, INFY... /",
             key="global_stock_search",
+            label_visibility="collapsed",
         )
     with header_cols[2]:
-        if st.button("Refresh", help="Refresh visible cached widgets."):
+        icon_cols = st.columns(2)
+        if icon_cols[0].button("🔔", key="natip_notifications", help="Notifications", use_container_width=True):
+            st.toast("No new alerts.")
+        if icon_cols[1].button("ST", key="natip_profile", help="Profile", use_container_width=True):
             st.cache_data.clear()
+            st.toast("Cache refreshed.")
             st.rerun()
     if selected:
         symbol = symbol_from_label(selected)
@@ -8340,57 +9252,66 @@ def render_app_header() -> str:
     if requested in APP_NAVIGATION:
         st.session_state["active_main_tab"] = requested
     if st.session_state.get("active_main_tab") not in APP_NAVIGATION:
-        st.session_state["active_main_tab"] = "Home"
-    active = st.radio(
-        "Main section",
-        options=APP_NAVIGATION,
-        horizontal=True,
-        label_visibility="collapsed",
-        key="active_main_tab",
-    )
-    return str(active)
+        st.session_state["active_main_tab"] = "Opportunities"
+    active = str(st.session_state["active_main_tab"])
+    for row_start in range(0, len(APP_NAVIGATION), 6):
+        row_items = APP_NAVIGATION[row_start : row_start + 6]
+        columns = st.columns(len(row_items))
+        for column, label in zip(columns, row_items, strict=True):
+            with column:
+                if st.button(
+                    label,
+                    key=f"main_nav_{label}",
+                    use_container_width=True,
+                    type="primary" if label == active else "secondary",
+                ):
+                    st.session_state["active_main_tab"] = label
+                    st.rerun()
+    st.divider()
+    st.markdown("</div>", unsafe_allow_html=True)
+    return str(st.session_state["active_main_tab"])
 
 
 def render_sidebar_status() -> None:
     """Render minimal sidebar status."""
 
     st.sidebar.markdown("## NATIP")
-    st.sidebar.caption("Research only · no live orders")
-    st.sidebar.divider()
     st.sidebar.caption("Market data: Yahoo/local cache")
     st.sidebar.caption("Execution: disabled")
 
 
 def render_home_decision_centre() -> None:
-    """Render the NATIP home decision centre."""
+    """Render a Groww-inspired NATIP investment dashboard."""
 
-    st.subheader("Today's Decision Centre")
-    st.caption(
-        "Conclusion first, details on demand. Values are shown only when cached data exists."
+    st.markdown(
+        """
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:10px;">
+          <div>
+            <h2 style="margin:0;color:#1f2937;">Explore investments</h2>
+            <div class="groww-muted">Demo data for UI preview. Use NATIP scanners for research-grade outputs.</div>
+          </div>
+          <span class="groww-demo-label">DEMO DATA</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-    snapshot = _home_market_snapshot()
-    card_cols = st.columns(4)
-    for index, item in enumerate(snapshot[:4]):
-        with card_cols[index]:
-            _render_shell_card(item["title"], item["value"], item["note"], item["tone"])
+    _render_groww_market_strip()
 
-    conclusion = _home_market_conclusion()
-    st.markdown("### NATIP Market Conclusion")
-    conclusion_cols = st.columns([1.1, 1.1, 1.1, 2])
-    conclusion_cols[0].markdown(_status_pill(conclusion["regime"], conclusion["tone"]), unsafe_allow_html=True)
-    conclusion_cols[1].markdown(_status_pill(conclusion["posture"], "warning"), unsafe_allow_html=True)
-    conclusion_cols[2].metric("Confidence", conclusion["confidence"])
-    conclusion_cols[3].write(conclusion["reason"])
-    with st.expander("View evidence", expanded=False):
-        st.write(conclusion["evidence"])
-
-    left, right = st.columns([1.35, 1])
+    left, right = st.columns([1.75, 0.95], gap="large")
     with left:
-        _render_home_opportunities()
+        _render_groww_bonds()
+        _render_groww_most_bought()
+        _render_groww_top_movers()
+        bottom_cols = st.columns(2)
+        with bottom_cols[0]:
+            _render_groww_trending_sectors()
+        with bottom_cols[1]:
+            _render_groww_market_news()
     with right:
-        _render_home_attention_centre()
-        _render_home_no_trade_reasons()
-    _render_home_sector_snapshot()
+        _render_groww_investment_summary()
+        _render_groww_tools_grid()
+        _render_groww_trading_screens()
+        _render_home_sector_snapshot()
 
 
 def _home_market_snapshot() -> list[dict[str, str]]:
@@ -8426,6 +9347,285 @@ def _home_market_snapshot() -> list[dict[str, str]]:
             "tone": "warning",
         },
     ]
+
+
+def _groww_demo_indices() -> list[dict[str, Any]]:
+    """Return compact demo index rows for the Groww-style market strip."""
+
+    return [
+        {"name": "NIFTY 50", "value": "25,114.00", "change": 86.10, "pct": 0.34},
+        {"name": "SENSEX", "value": "82,031.20", "change": 221.70, "pct": 0.27},
+        {"name": "BANK NIFTY", "value": "56,418.65", "change": -112.40, "pct": -0.20},
+        {"name": "NIFTY IT", "value": "36,982.30", "change": 148.55, "pct": 0.40},
+        {"name": "INDIA VIX", "value": "12.84", "change": -0.31, "pct": -2.36},
+    ]
+
+
+def _groww_demo_stocks() -> list[dict[str, Any]]:
+    """Return realistic demo stock rows for the Groww-style dashboard."""
+
+    return [
+        {"company": "Reliance Industries", "ticker": "RELIANCE.NS", "price": 2864.20, "change": 1.18, "volume": "82.4L", "sector": "Energy"},
+        {"company": "Tata Consultancy", "ticker": "TCS.NS", "price": 4112.75, "change": -0.46, "volume": "21.8L", "sector": "IT"},
+        {"company": "ICICI Bank", "ticker": "ICICIBANK.NS", "price": 1288.30, "change": 0.72, "volume": "1.42Cr", "sector": "Banking"},
+        {"company": "Larsen & Toubro", "ticker": "LT.NS", "price": 3718.45, "change": 1.96, "volume": "18.5L", "sector": "Infrastructure"},
+        {"company": "Bharat Electronics", "ticker": "BEL.NS", "price": 318.80, "change": 3.14, "volume": "2.61Cr", "sector": "Defence"},
+        {"company": "Tata Steel", "ticker": "TATASTEEL.NS", "price": 166.25, "change": -1.28, "volume": "4.35Cr", "sector": "Metals"},
+        {"company": "Sun Pharma", "ticker": "SUNPHARMA.NS", "price": 1792.10, "change": 0.41, "volume": "15.3L", "sector": "Pharma"},
+        {"company": "M&M", "ticker": "M&M.NS", "price": 3268.55, "change": 2.06, "volume": "32.6L", "sector": "Auto"},
+    ]
+
+
+def _render_groww_market_strip() -> None:
+    """Render compact index summaries."""
+
+    cards = []
+    for item in _groww_demo_indices():
+        tone = "groww-positive" if float(item["change"]) >= 0 else "groww-negative"
+        cards.append(
+            f"""
+            <div class="groww-index-card">
+              <div class="groww-muted">{html.escape(item["name"])}</div>
+              <div class="groww-price">{html.escape(item["value"])}</div>
+              <div class="{tone}">{float(item["change"]):+,.2f} ({float(item["pct"]):+.2f}%)</div>
+            </div>
+            """
+        )
+    st.markdown(f'<div class="groww-index-strip">{"".join(cards)}</div>', unsafe_allow_html=True)
+
+
+def _render_groww_section_title(title: str, action: str = "See more") -> None:
+    """Render a Groww-style section heading."""
+
+    st.markdown(
+        f"""
+        <div class="groww-section-title">
+          <h3>{html.escape(title)}</h3>
+          <span class="groww-see-more">{html.escape(action)}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_groww_bonds() -> None:
+    """Render demo popular bond cards."""
+
+    st.markdown('<div class="groww-card">', unsafe_allow_html=True)
+    _render_groww_section_title("Popular bonds")
+    bond_cols = st.columns(3)
+    bonds = [
+        ("Power Finance Corp", "8.21%", "39 months", "AAA"),
+        ("REC Limited", "8.05%", "28 months", "AAA"),
+        ("NABARD", "7.74%", "54 months", "AAA"),
+    ]
+    for column, (issuer, yield_text, tenure, rating) in zip(bond_cols, bonds, strict=True):
+        with column:
+            st.markdown(
+                f"""
+                <div class="groww-stock-card">
+                  <div class="groww-name">{html.escape(issuer)}</div>
+                  <div class="groww-muted">Yield · Tenure · Rating</div>
+                  <div class="groww-price">{yield_text}</div>
+                  <div class="groww-muted">{html.escape(tenure)} · {html.escape(rating)}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def _render_groww_most_bought() -> None:
+    """Render compact most-bought stock cards with watchlist controls."""
+
+    st.markdown('<div class="groww-card">', unsafe_allow_html=True)
+    _render_groww_section_title("Most bought stocks")
+    watchlist = st.session_state.setdefault("groww_watchlist", [])
+    stock_cols = st.columns(4)
+    for column, stock in zip(stock_cols, _groww_demo_stocks()[:4], strict=True):
+        ticker = str(stock["ticker"])
+        tone = "groww-positive" if float(stock["change"]) >= 0 else "groww-negative"
+        with column:
+            st.markdown(
+                f"""
+                <div class="groww-stock-card">
+                  <div class="groww-name">{html.escape(str(stock["company"]))}</div>
+                  <div class="groww-muted">{html.escape(ticker)}</div>
+                  <div class="groww-price">₹{float(stock["price"]):,.2f}</div>
+                  <div class="{tone}">{float(stock["change"]):+.2f}% today</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            button_label = "Remove" if ticker in watchlist else "Watch"
+            if st.button(button_label, key=f"groww_watch_{ticker}", use_container_width=True):
+                if ticker in watchlist:
+                    watchlist.remove(ticker)
+                else:
+                    watchlist.append(ticker)
+                st.rerun()
+            if st.button("Open", key=f"groww_open_{ticker}", use_container_width=True):
+                open_symbol_in_fetch_analysis(ticker.replace(".NS", ""))
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def _render_groww_top_movers() -> None:
+    """Render functional movers table with category tabs and sorting."""
+
+    st.markdown('<div class="groww-card">', unsafe_allow_html=True)
+    _render_groww_section_title("Top movers")
+    filter_cols = st.columns([1.2, 1.0, 1.0])
+    index_filter = filter_cols[0].selectbox("Index", ["Nifty 50", "Nifty 100", "Nifty 250"], key="groww_movers_index")
+    sort_by = filter_cols[1].selectbox("Sort by", ["Daily Change", "Market Price", "Volume"], key="groww_movers_sort")
+    filter_cols[2].caption(f"Showing {index_filter} demo rows")
+
+    frame = pd.DataFrame(_groww_demo_stocks())
+    tabs = st.tabs(["Gainers", "Losers", "Volume Shockers"])
+    sort_column = {"Daily Change": "change", "Market Price": "price", "Volume": "volume"}[sort_by]
+    for tab, mode in zip(tabs, ["gainers", "losers", "volume"], strict=True):
+        with tab:
+            data = frame.copy()
+            if mode == "gainers":
+                data = data[data["change"] >= 0].sort_values(sort_column, ascending=False)
+            elif mode == "losers":
+                data = data[data["change"] < 0].sort_values("change")
+            else:
+                data = data.sort_values("volume", ascending=False)
+            display = data.rename(
+                columns={
+                    "company": "Company",
+                    "ticker": "Ticker",
+                    "price": "Market Price",
+                    "change": "Daily Change %",
+                    "volume": "Volume",
+                }
+            )[["Company", "Ticker", "Market Price", "Daily Change %", "Volume"]]
+            st.dataframe(display, use_container_width=True, hide_index=True)
+            selected = st.selectbox(
+                "Open stock detail",
+                [""] + display["Ticker"].astype(str).tolist(),
+                key=f"groww_detail_{mode}",
+                label_visibility="collapsed",
+            )
+            if selected:
+                _render_groww_stock_detail(selected, frame)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def _render_groww_stock_detail(ticker: str, stocks: pd.DataFrame) -> None:
+    """Render a compact selected stock detail panel."""
+
+    row = stocks[stocks["ticker"].astype(str).eq(ticker)].head(1)
+    if row.empty:
+        st.warning("Selected stock detail is unavailable.")
+        return
+    item = row.iloc[0].to_dict()
+    st.markdown(
+        f"""
+        <div class="groww-empty">
+          <b>{html.escape(str(item["company"]))}</b> · {html.escape(ticker)}<br/>
+          Sector: {html.escape(str(item["sector"]))} · Price: ₹{float(item["price"]):,.2f} · Change: {float(item["change"]):+.2f}%
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if st.button(f"Open {ticker} in Fetch Analysis", key=f"groww_detail_open_{ticker}"):
+        open_symbol_in_fetch_analysis(ticker.replace(".NS", ""))
+
+
+def _render_groww_trending_sectors() -> None:
+    """Render trending sectors card."""
+
+    st.markdown('<div class="groww-card">', unsafe_allow_html=True)
+    _render_groww_section_title("Trending sectors")
+    sectors = [
+        ("Defence", "+3.8%", "Leadership improving"),
+        ("Auto", "+2.4%", "Breadth strong"),
+        ("IT", "+1.6%", "Recovery watch"),
+        ("Metals", "-1.1%", "Profit booking"),
+    ]
+    for sector, change, note in sectors:
+        tone = "groww-positive" if change.startswith("+") else "groww-negative"
+        st.markdown(
+            f'<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f2f4f7;"><span>{html.escape(sector)}</span><span class="{tone}">{change}</span></div><div class="groww-muted">{html.escape(note)}</div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def _render_groww_market_news() -> None:
+    """Render concise market-news demo card."""
+
+    st.markdown('<div class="groww-card">', unsafe_allow_html=True)
+    _render_groww_section_title("Market news")
+    news = [
+        "RBI commentary keeps rate-sensitive sectors in focus.",
+        "Crude movement watched for paints, aviation and OMC margins.",
+        "IT stocks firm as rupee weakness supports export sentiment.",
+    ]
+    for item in news:
+        st.markdown(f'<div class="groww-muted" style="padding:7px 0;">{html.escape(item)}</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def _render_groww_investment_summary() -> None:
+    """Render right-sidebar investment summary."""
+
+    st.markdown('<div class="groww-card">', unsafe_allow_html=True)
+    _render_groww_section_title("Investment summary", "Research only")
+    st.markdown(
+        """
+        <div class="groww-empty">
+          No portfolio is connected. Add stocks to your local watchlist or open NATIP scanners to build a research queue.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    watchlist = st.session_state.get("groww_watchlist", [])
+    st.caption(f"Watchlist: {len(watchlist)} demo stocks")
+    if watchlist:
+        st.write(", ".join(watchlist))
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def _render_groww_tools_grid() -> None:
+    """Render product/tool shortcut grid."""
+
+    st.markdown('<div class="groww-card">', unsafe_allow_html=True)
+    _render_groww_section_title("Products & tools")
+    st.markdown(
+        """
+        <div class="groww-tool-grid">
+          <div class="groww-tool">IPO</div>
+          <div class="groww-tool">Bonds</div>
+          <div class="groww-tool">ETFs</div>
+          <div class="groww-tool">SIP</div>
+          <div class="groww-tool">Screeners</div>
+          <div class="groww-tool">Alerts</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def _render_groww_trading_screens() -> None:
+    """Render bullish/bearish screen summaries."""
+
+    st.markdown('<div class="groww-card">', unsafe_allow_html=True)
+    _render_groww_section_title("Trading screens")
+    screens = [
+        ("Bullish breakouts", "12 names", "groww-positive"),
+        ("Sector leaders", "7 names", "groww-positive"),
+        ("Bearish breakdowns", "5 names", "groww-negative"),
+        ("Volume shockers", "18 names", "groww-muted"),
+    ]
+    for title, count, tone in screens:
+        st.markdown(
+            f'<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f2f4f7;"><span>{html.escape(title)}</span><span class="{tone}">{html.escape(count)}</span></div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _home_market_conclusion() -> dict[str, Any]:
@@ -8536,12 +9736,520 @@ def _render_home_sector_snapshot() -> None:
             "Action",
         ]
         columns = [column for column in desired if column in frame.columns]
-        st.dataframe(frame[columns].head(8) if columns else frame.head(8), width="stretch", hide_index=True)
+        st.dataframe(frame[columns].head(8) if columns else frame.head(8), use_container_width=True, hide_index=True)
     else:
         _render_empty_state(
             "No sector rotation output",
             "Run Sector Rotation to populate leading, emerging, weakening and lagging sectors.",
         )
+
+
+def render_quarterly_results_tab() -> None:
+    """Render Screener quarterly-results analysis dashboard."""
+
+    st.subheader("Quarterly Results Analysis")
+    st.caption(
+        "Fetches permitted Screener latest-result rows, attached PDFs and company quarterly "
+        "history. Scores are research-ranking heuristics, not success probabilities."
+    )
+    store = QuarterlyResultsStore(PROJECT_ROOT / "data" / "quarterly_results")
+    max_results = 25
+    button_cols = st.columns([1.8, 2.2])
+    if button_cols[0].button("Update Quarterly Results Data", type="primary", use_container_width=True):
+        try:
+            with st.spinner("Updating latest quarterly results from Screener..."):
+                imported = _update_quarterly_results_data(store=store, max_results=max_results)
+            st.success(f"Updated {len(imported)} quarterly result record(s).")
+            st.rerun()
+        except Exception as exc:
+            st.error("Quarterly results update failed.")
+            st.exception(exc)
+    button_cols[1].caption(
+        "Open Screener latest results in Chrome and stay logged in. This button reads that tab first, "
+        "then falls back to permitted direct access."
+    )
+
+    with st.expander("Advanced fallback: paste Screener page HTML or copied text", expanded=False):
+        st.caption(
+            "Login to Screener in your browser, open https://www.screener.in/results/latest/, "
+            "then either upload saved HTML or copy the visible page content with Cmd+A, Cmd+C and paste it here. "
+            "This avoids storing your password and avoids relying on Streamlit to reuse Chrome cookies."
+        )
+        uploaded_html = st.file_uploader(
+            "Upload saved Screener latest-results HTML/text",
+            type=["html", "htm", "txt"],
+            key="quarterly_results_html_upload",
+        )
+        pasted_html = st.text_area(
+            "Or paste latest-results page HTML / visible copied text",
+            height=120,
+            placeholder="Paste Screener latest-results page text here, for example copied using Cmd+A then Cmd+C.",
+            key="quarterly_results_html_paste",
+        )
+        if st.button("Import logged-in page data", key="quarterly_results_import_html"):
+            html_text = ""
+            if uploaded_html is not None:
+                html_text = uploaded_html.getvalue().decode("utf-8", errors="ignore")
+            elif pasted_html.strip():
+                html_text = pasted_html
+            if not html_text.strip():
+                st.warning("Upload HTML/text or paste copied Screener latest-results page content first.")
+            else:
+                with st.spinner("Processing imported Screener page data..."):
+                    collector = ScreenerQuarterlyResultsCollector(
+                        store=store,
+                        request_delay_seconds=0.5,
+                    )
+                    looks_like_html = "<html" in html_text.casefold() or "<table" in html_text.casefold()
+                    if looks_like_html:
+                        imported = collector.collect_from_latest_results_html(
+                            html_text,
+                            max_results=max_results,
+                            enrich=False,
+                        )
+                    else:
+                        imported = collector.collect_from_latest_results_text(
+                            html_text,
+                            max_results=max_results,
+                        )
+                st.success(f"Imported {len(imported)} result record(s).")
+                st.rerun()
+
+    job_id = st.session_state.get("quarterly_results_job_id")
+    if job_id:
+        snapshot = get_quarterly_results_job(str(job_id))
+        if snapshot:
+            st.progress(snapshot.progress, text=snapshot.message)
+            if snapshot.is_running:
+                st.info("Collection is running in the background. Refresh this tab to update progress.")
+            elif snapshot.status == "failed":
+                st.error(snapshot.message)
+            else:
+                st.success(snapshot.message)
+
+    records = store.list_records()
+    if records:
+        latest = max(record.collection_timestamp for record in records)
+        stale = datetime.now(UTC) - latest > timedelta(hours=6)
+        if stale:
+            st.warning(
+                "Saved quarterly results are older than 6 hours. Click Update Quarterly Results Data."
+            )
+    else:
+        st.info("No quarterly result records saved yet. Click Update Quarterly Results Data to start.")
+
+    display_records = _latest_quarterly_records_for_display(records)
+    _render_quarterly_results_update_proof(display_records or records)
+    _render_quarterly_results_filters_and_table(display_records or records)
+
+
+def _read_screener_latest_from_chrome() -> str:
+    """Read visible text from an already logged-in Chrome Screener tab."""
+
+    script = r'''
+tell application "Google Chrome"
+    repeat with w in windows
+        repeat with t in tabs of w
+            set tabUrl to URL of t
+            if tabUrl contains "screener.in/results/latest" then
+                return execute javascript "document.body.innerText" in t
+            end if
+        end repeat
+    end repeat
+end tell
+return ""
+'''
+    result = subprocess.run(
+        ["osascript", "-e", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    if result.returncode != 0:
+        error = (result.stderr or result.stdout or "Unknown Chrome automation error.").strip()
+        if "Access not allowed" in error or "-1723" in error:
+            raise RuntimeError(
+                "Chrome blocked NATIP from reading the logged-in Screener tab. "
+                "In Chrome, enable View -> Developer -> Allow JavaScript from Apple Events, "
+                "keep https://www.screener.in/results/latest/ open and logged in, then try again."
+            )
+        raise RuntimeError(error)
+    page_text = result.stdout.strip()
+    if not page_text:
+        raise RuntimeError(
+            "No open Chrome tab found for https://www.screener.in/results/latest/. "
+            "Open that page after logging into Screener, then try again."
+        )
+    return page_text
+
+
+def _latest_quarterly_records_for_display(
+    records: list[QuarterlyResultRecord],
+) -> list[QuarterlyResultRecord]:
+    """Return one latest useful quarterly-result record per company/quarter."""
+
+    usable = [
+        record
+        for record in records
+        if record.status not in {"access_blocked", "failed"}
+        and record.company_name not in {
+            "Screener latest results",
+            "Screener latest results import",
+            "Screener latest results text import",
+        }
+    ]
+    latest: dict[tuple[str, str], QuarterlyResultRecord] = {}
+    for record in usable:
+        key = (
+            (record.symbol or record.company_name).casefold(),
+            (record.reporting_quarter or "").casefold(),
+        )
+        current = latest.get(key)
+        if current is None or record.collection_timestamp > current.collection_timestamp:
+            latest[key] = record
+    return sorted(latest.values(), key=lambda item: item.collection_timestamp, reverse=True)
+
+
+def _render_quarterly_results_update_proof(records: list[QuarterlyResultRecord]) -> None:
+    """Render a compact proof of the most recently saved quarterly-result rows."""
+
+    published = [record for record in records if record.status == "published"]
+    if not published:
+        return
+    latest_time = max(record.collection_timestamp for record in published)
+    latest_records = [record for record in published if record.collection_timestamp == latest_time][:4]
+    st.caption(f"Latest saved update: {latest_time.astimezone(IST).strftime('%d %b %Y %H:%M:%S IST')}")
+    proof_cols = st.columns(max(1, len(latest_records)))
+    for column, record in zip(proof_cols, latest_records, strict=False):
+        with column:
+            st.metric(
+                record.company_name[:22],
+                record.source_values.get("Net profit") or "Net NA",
+                delta=f"Sales {record.source_values.get('Sales') or 'NA'}",
+            )
+
+
+def _update_quarterly_results_data(
+    *,
+    store: QuarterlyResultsStore,
+    max_results: int,
+) -> list[QuarterlyResultRecord]:
+    """Update quarterly results using the most reliable available local method."""
+
+    errors: list[str] = []
+    collector = ScreenerQuarterlyResultsCollector(store=store)
+    try:
+        page_text = _read_screener_latest_from_chrome()
+        records = collector.collect_from_latest_results_text(page_text, max_results=max_results)
+        usable = [record for record in records if record.status == "published"]
+        if usable:
+            return usable
+        errors.append("Chrome tab was readable, but no published result rows were parsed.")
+    except Exception as exc:
+        errors.append(f"Chrome tab read failed: {exc}")
+
+    try:
+        page_text = _copy_screener_latest_from_chrome_ui()
+        records = collector.collect_from_latest_results_text(page_text, max_results=max_results)
+        usable = [record for record in records if record.status == "published"]
+        if usable:
+            return usable
+        errors.append("Chrome UI copy ran, but no published result rows were parsed.")
+    except Exception as exc:
+        errors.append(f"Chrome UI copy failed: {exc}")
+
+    try:
+        page_text = _read_screener_latest_from_clipboard()
+        records = collector.collect_from_latest_results_text(page_text, max_results=max_results)
+        usable = [record for record in records if record.status == "published"]
+        if usable:
+            return usable
+        errors.append("Clipboard contained text, but no published result rows were parsed.")
+    except Exception as exc:
+        errors.append(f"Clipboard import failed: {exc}")
+
+    try:
+        records = collector.collect_latest(max_pages=1, max_results=max_results)
+        usable = [record for record in records if record.status == "published"]
+        if usable:
+            return usable
+        if records:
+            errors.append(records[0].status_message or f"Direct Screener fetch returned {records[0].status}.")
+        else:
+            errors.append("Direct Screener fetch returned no records.")
+    except Exception as exc:
+        errors.append(f"Direct Screener fetch failed: {exc}")
+
+    raise RuntimeError(
+        "Unable to update quarterly results automatically. "
+        + " | ".join(errors)
+        + " Open https://www.screener.in/results/latest/ in Chrome after logging in. "
+        "If Chrome blocks local tab reading, enable Chrome -> View -> Developer -> "
+        "Allow JavaScript from Apple Events. If macOS blocks keyboard copy, enable "
+        "System Settings -> Privacy & Security -> Accessibility for Terminal/Codex/ChatGPT. "
+        "Fast fallback: copy the Screener results page with Cmd+A, Cmd+C, then click "
+        "Update Quarterly Results Data again."
+    )
+
+
+def _copy_screener_latest_from_chrome_ui() -> str:
+    """Use Chrome UI automation to copy the logged-in Screener page text."""
+
+    script = r'''
+tell application "Google Chrome"
+    activate
+    repeat with w in windows
+        set tabIndex to 1
+        repeat with t in tabs of w
+            if (URL of t) contains "screener.in/results/latest" then
+                set active tab index of w to tabIndex
+                set index of w to 1
+                exit repeat
+            end if
+            set tabIndex to tabIndex + 1
+        end repeat
+    end repeat
+end tell
+delay 0.5
+tell application "System Events"
+    keystroke "a" using command down
+    delay 0.15
+    keystroke "c" using command down
+end tell
+'''
+    result = subprocess.run(
+        ["osascript", "-e", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    if result.returncode != 0:
+        error = (result.stderr or result.stdout or "Unknown Chrome UI copy error.").strip()
+        raise RuntimeError(error)
+    return _read_screener_latest_from_clipboard()
+
+
+def _read_screener_latest_from_clipboard() -> str:
+    """Read copied Screener latest-results text from the macOS clipboard."""
+
+    result = subprocess.run(
+        ["pbpaste"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "Could not read clipboard.").strip())
+    page_text = result.stdout.strip()
+    lowered = page_text.casefold()
+    if "latest quarterly results" not in lowered and "yoy" not in lowered:
+        raise RuntimeError("Clipboard does not look like Screener latest-results page text.")
+    return page_text
+
+
+def _render_quarterly_results_filters_and_table(records: list[QuarterlyResultRecord]) -> None:
+    """Render filters, shortlist and detail view."""
+
+    if not records:
+        return
+    frame = pd.DataFrame([_quarterly_result_dashboard_row(record) for record in records])
+    filter_cols = st.columns(6)
+    result_strength = filter_cols[0].selectbox(
+        "Result strength",
+        ["All"] + sorted(frame["Result Strength"].dropna().astype(str).unique().tolist()),
+    )
+    valuation = filter_cols[1].selectbox(
+        "Valuation",
+        ["All"] + sorted(frame["Valuation"].dropna().astype(str).unique().tolist()),
+    )
+    confidence = filter_cols[2].selectbox(
+        "Confidence",
+        ["All"] + sorted(frame["Confidence"].dropna().astype(str).unique().tolist()),
+    )
+    action = filter_cols[3].selectbox(
+        "Action",
+        ["All"] + sorted(frame["Research Action"].dropna().astype(str).unique().tolist()),
+    )
+    status = filter_cols[4].selectbox(
+        "Status",
+        ["All"] + sorted(frame["Status"].dropna().astype(str).unique().tolist()),
+    )
+    query = filter_cols[5].text_input("Company / symbol", placeholder="Search...")
+
+    filtered = frame.copy()
+    for column, selected in {
+        "Result Strength": result_strength,
+        "Valuation": valuation,
+        "Confidence": confidence,
+        "Research Action": action,
+        "Status": status,
+    }.items():
+        if selected != "All":
+            filtered = filtered[filtered[column].astype(str).eq(selected)]
+    if query.strip():
+        needle = query.strip().casefold()
+        filtered = filtered[
+            filtered["Company"].astype(str).str.casefold().str.contains(needle)
+            | filtered["Symbol"].astype(str).str.casefold().str.contains(needle)
+        ]
+
+    st.markdown("### Potential Buy Candidates")
+    candidate_actions = {
+        "Research priority",
+        "Watch for valuation",
+        "Promising results — investment assessment incomplete",
+    }
+    candidates = filtered[filtered["Research Action"].isin(candidate_actions)]
+    if candidates.empty:
+        _render_empty_state(
+            "No evidence-backed candidate shortlist yet",
+            "Strong quarter alone is not treated as an unconditional buy. Missing valuation or evidence keeps names out of the shortlist.",
+        )
+    else:
+        st.dataframe(candidates, use_container_width=True, hide_index=True)
+
+    st.markdown("### Results Dashboard")
+    visible_columns = [
+        "Company",
+        "Symbol",
+        "Quarter",
+        "Sales",
+        "Operating Profit",
+        "Net Profit",
+        "EPS",
+        "Revenue Growth",
+        "Profit Growth",
+        "Operating Margin",
+        "Price",
+        "Market Cap",
+        "P/E",
+        "Result Strength",
+        "Valuation",
+        "Confidence",
+        "Research Action",
+        "Status",
+        "Last Updated",
+    ]
+    st.dataframe(
+        filtered[[column for column in visible_columns if column in filtered.columns]],
+        use_container_width=True,
+        hide_index=True,
+    )
+    selected_key = st.selectbox(
+        "Company detail",
+        [""] + [f"{record.company_name} | {record.filing_id}" for record in records],
+    )
+    if selected_key:
+        filing_id = selected_key.rsplit("|", maxsplit=1)[-1].strip()
+        selected_record = next((record for record in records if record.filing_id == filing_id), None)
+        if selected_record:
+            _render_quarterly_result_detail(selected_record)
+
+
+def _quarterly_result_dashboard_row(record: QuarterlyResultRecord) -> dict[str, Any]:
+    """Return a clear dashboard row with raw read values plus analysis fields."""
+
+    row = record.display_row()
+    analysis = record.analysis
+    row.update(
+        {
+            "Sales": record.source_values.get("Sales") or record.source_values.get("Revenue") or "",
+            "Operating Profit": record.source_values.get("Operating Profit") or record.source_values.get("EBIDT") or "",
+            "Net Profit": record.source_values.get("Net profit") or record.source_values.get("Net Profit") or "",
+            "EPS": record.source_values.get("EPS") or "",
+            "Operating Margin": analysis.operating_margin if analysis else "Pending",
+            "Price": record.top_ratios.get("Current Price", ""),
+            "Market Cap": record.top_ratios.get("Market Cap", ""),
+            "P/E": record.top_ratios.get("Stock P/E", ""),
+        }
+    )
+    return row
+
+
+def _render_quarterly_result_detail(record: QuarterlyResultRecord) -> None:
+    """Render detailed quarterly-result analysis."""
+
+    st.markdown("### Company detail")
+    analysis = record.analysis
+    if record.status == "access_blocked":
+        st.error(record.status_message)
+        st.caption("Source: https://www.screener.in/results/latest/")
+        return
+    top_cols = st.columns(4)
+    top_cols[0].metric("Company", record.company_name)
+    top_cols[1].metric("Quarter", record.reporting_quarter or "Unavailable")
+    top_cols[2].metric("Basis", record.reporting_basis or "Unknown")
+    top_cols[3].metric("Status", record.status)
+    if analysis is None:
+        st.warning("Analysis is pending or unavailable for this record.")
+        return
+
+    st.markdown("#### Quarter in 30 seconds")
+    st.write(analysis.quarter_summary)
+    metric_cols = st.columns(5)
+    metric_cols[0].metric("Revenue YoY", analysis.revenue_growth_yoy)
+    metric_cols[1].metric("Profit YoY", analysis.profit_growth_yoy)
+    metric_cols[2].metric("Margin", analysis.operating_margin)
+    metric_cols[3].metric("Margin Change", analysis.margin_change_bps)
+    metric_cols[4].metric("Evidence", analysis.evidence_confidence)
+
+    comparison_rows = [
+        {"Metric": "Revenue QoQ", "Value": analysis.revenue_growth_qoq},
+        {"Metric": "Revenue YoY", "Value": analysis.revenue_growth_yoy},
+        {"Metric": "Profit QoQ", "Value": analysis.profit_growth_qoq},
+        {"Metric": "Profit YoY", "Value": analysis.profit_growth_yoy},
+        {"Metric": "EPS Growth", "Value": analysis.eps_growth},
+        {"Metric": "Operating Margin", "Value": analysis.operating_margin},
+    ]
+    st.markdown("#### Key financial comparison")
+    st.dataframe(pd.DataFrame(comparison_rows), use_container_width=True, hide_index=True)
+
+    detail_cols = st.columns(2)
+    with detail_cols[0]:
+        st.markdown("#### What improved")
+        for item in analysis.improved or ["No clear improvement detected from available evidence."]:
+            st.write(f"- {item}")
+        st.markdown("#### Why results changed")
+        for item in analysis.result_drivers or ["No management/extracted driver evidence available."]:
+            st.write(f"- {item}")
+    with detail_cols[1]:
+        st.markdown("#### What weakened")
+        for item in analysis.weakened or ["No clear weakening detected from available evidence."]:
+            st.write(f"- {item}")
+        st.markdown("#### Main risks and unanswered questions")
+        for item in [*analysis.risks, *analysis.unanswered_questions] or ["No major unresolved item captured."]:
+            st.write(f"- {item}")
+
+    st.markdown("#### Earnings quality")
+    st.write(analysis.earnings_quality)
+    st.markdown("#### Valuation assessment")
+    st.write(analysis.valuation_notes)
+    st.markdown("#### Shortlist rationale")
+    st.write(analysis.shortlist_reason)
+
+    if record.document_facts:
+        st.markdown("#### Linked evidence")
+        evidence_rows = [
+            {
+                "Fact": fact.label,
+                "Value": fact.value,
+                "Page": fact.page_number or "",
+                "Confidence": f"{fact.confidence:.0%}",
+                "Excerpt": fact.excerpt,
+                "Source": fact.source,
+            }
+            for fact in record.document_facts
+        ]
+        st.dataframe(pd.DataFrame(evidence_rows), use_container_width=True, hide_index=True)
+    if record.pdf_url:
+        st.link_button("Open original PDF", record.pdf_url)
+    if record.validation_warnings:
+        with st.expander("Validation warnings", expanded=False):
+            for warning in record.validation_warnings:
+                st.write(f"- {warning}")
 
 
 def render_markets_page(provider: YahooFinanceMarketProvider) -> None:
@@ -8578,7 +10286,7 @@ def render_opportunities_page() -> None:
     if rows.empty:
         _render_empty_state("No opportunity scan available", "Run Buying Agent or Stock Probability.")
     else:
-        st.dataframe(rows.head(50), width="stretch", hide_index=True)
+        st.dataframe(rows.head(50), use_container_width=True, hide_index=True)
 
 
 def render_placeholder_product_page(title: str, detail: str) -> None:
@@ -8603,7 +10311,7 @@ def render_system_health_page() -> None:
         {"Component": "Clean cache", "Status": "Configured" if CLEAN_CACHE_DIR.exists() else "Missing", "Detail": str(CLEAN_CACHE_DIR)},
         {"Component": "Execution", "Status": "Disabled", "Detail": "No live orders are sent."},
     ]
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 def render_settings_page(settings: Settings) -> None:
@@ -8763,7 +10471,6 @@ def _opportunity_why(row: pd.Series) -> str:
 
 provider = YahooFinanceMarketProvider()
 settings = get_settings()
-render_sidebar_status()
 active_tab = render_app_header()
 if active_tab == "Home":
     render_home_decision_centre()
@@ -8775,6 +10482,8 @@ elif active_tab == "Fetch Analysis":
     render_fetch_analysis(provider, settings)
 elif active_tab == "Buying Agent":
     render_buying_agent(settings)
+elif active_tab == "Quarterly Results":
+    render_quarterly_results_tab()
 elif active_tab == "Sector Rotation":
     render_sector_rotation_tab()
 elif active_tab == "Raw Material Impact":
@@ -8820,4 +10529,5 @@ elif active_tab == "Settings":
 elif active_tab == "Astro Research":
     render_astro_research_tab(settings)
 else:
-    render_promoter_linkage()
+    st.session_state["active_main_tab"] = "Opportunities"
+    render_opportunities_page()
