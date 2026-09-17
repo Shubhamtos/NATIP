@@ -2887,7 +2887,11 @@ def interval_max_days(interval: str) -> int:
 def render_fetch_analysis(provider: YahooFinanceMarketProvider, settings: Settings) -> None:
     """Render the single-stock analysis tab."""
 
-    st.subheader("Fetch Analysis")
+    st.subheader("Analyse a Stock")
+    st.caption(
+        "One stock, one workflow: choose an NSE symbol, keep daily candles unless you need intraday, "
+        "then run the complete chart, fundamentals, technicals, agents and data-quality analysis."
+    )
     pending_symbol = st.session_state.pop("pending_fetch_symbol", None)
     pending_interval = st.session_state.pop("pending_fetch_interval", "1d")
     pending_days = int(st.session_state.pop("pending_fetch_days", 180))
@@ -2902,14 +2906,15 @@ def render_fetch_analysis(provider: YahooFinanceMarketProvider, settings: Settin
         interval_default_days(str(st.session_state["fetch_interval"])),
     )
     symbol_labels = labels()
-    control_cols = st.columns([2, 1, 1, 1])
-    selected_label = control_cols[0].selectbox("NSE stock", options=symbol_labels, index=0)
-    custom_symbol = control_cols[1].text_input(
-        "Custom symbol",
-        key="fetch_custom_symbol",
+    control_cols = st.columns([2.2, 0.9, 0.9])
+    selected_label = control_cols[0].selectbox(
+        "Search company or NSE symbol",
+        options=symbol_labels,
+        index=0,
+        help="Use this for NSE stocks. Advanced custom symbols are available below.",
     )
-    interval = control_cols[2].selectbox(
-        "Candlestick interval",
+    interval = control_cols[1].selectbox(
+        "Chart interval",
         options=["1d", "1h", "30m", "15m", "5m", "1m"],
         key="fetch_interval",
     )
@@ -2917,17 +2922,26 @@ def render_fetch_analysis(provider: YahooFinanceMarketProvider, settings: Settin
         interval
     ):
         st.session_state["fetch_days"] = interval_max_days(interval)
-    days = control_cols[3].slider(
-        "Lookback days",
+    days = control_cols[2].slider(
+        "Lookback",
         min_value=1,
         max_value=interval_max_days(interval),
         key="fetch_days",
     )
+    with st.expander("Advanced: custom Yahoo symbol", expanded=False):
+        custom_symbol = st.text_input(
+            "Custom symbol",
+            help="Optional. Example: RELIANCE.NS or ^NSEI. Leave blank for the NSE stock selected above.",
+            key="fetch_custom_symbol",
+        )
     symbol = symbol_from_label(selected_label)
     if custom_symbol.strip():
         symbol = custom_symbol.strip().upper().replace(".NS", "")
 
-    should_fetch = pending_symbol is not None or st.button("Fetch analysis", type="primary")
+    should_fetch = pending_symbol is not None or st.button(
+        "Run complete analysis",
+        type="primary",
+    )
     if should_fetch:
         status = st.status(f"Loading `{symbol}` fetch analysis...", expanded=True)
 
@@ -2967,7 +2981,7 @@ def render_fetch_analysis(provider: YahooFinanceMarketProvider, settings: Settin
     if "fetch_error" in st.session_state:
         st.error(st.session_state["fetch_error"])
     elif "quote" not in st.session_state:
-        st.info("Select an NSE stock and click Fetch analysis.")
+        st.info("Select an NSE stock and click Run complete analysis.")
     else:
         render_single_stock_dashboard()
 
@@ -3276,6 +3290,19 @@ def render_buying_agent(settings: Settings) -> None:
     """Render the two-stage buying-agent tab."""
 
     st.subheader("Stock Buying Agent")
+    guided_mode = st.selectbox(
+        "Guided mode",
+        options=["Breakout", "Conservative", "Institutional Accumulation", "Custom"],
+        help=(
+            "Use this as an interpretation guide. The underlying strategy tabs and calculations "
+            "remain unchanged."
+        ),
+        key="buying_agent_guided_mode",
+    )
+    st.caption(
+        f"{guided_mode} mode: review the matching strategy output first, then confirm data freshness, "
+        "risk, liquidity and the next action before using any stock for further research."
+    )
     darvax_tab, vcp_tab, shareholding_tab, dual_darvas_tab, buying_agent_tab = st.tabs(
         [
             "DarvaX Pattern Search",
@@ -3724,6 +3751,11 @@ def render_stock_probability_tab() -> None:
         "Ranks stocks by modeled probability of outperforming Nifty 50 over the next "
         "20 trading days. Cached mode is fast and does not contact Yahoo."
     )
+    st.info(
+        "Interpretation: this is a calibrated model score from historical validation, not a certainty "
+        "or expected return. Always read it with the validation horizon, sample size, hit-rate evidence, "
+        "liquidity and risk warnings before acting."
+    )
     info_cols = st.columns(4)
     info_cols[0].metric("Benchmark", "^NSEI")
     info_cols[1].metric("Horizon", "20 trading days")
@@ -4029,7 +4061,7 @@ def render_dual_listed_darvas_results(
             st.caption("Enable `Show rejected rows` to inspect failed guardrails.")
         return
 
-    st.caption("Click a symbol to open that stock in Fetch Analysis.")
+    st.caption("Click a symbol to open that stock in Analyse a Stock.")
     accepted = sum(result.decision != DarvasDecision.REJECT for result in results)
     st.write(f"Scanned {len(results)} stock(s). Non-rejected setups: {accepted}.")
     header = st.columns([0.8, 0.95, 1.2, 0.9, 0.9, 0.9, 0.9, 0.75, 1.1, 1.2])
@@ -4052,7 +4084,7 @@ def render_dual_listed_darvas_results(
         if columns[0].button(
             result.symbol,
             key=f"dual-darvas-result-symbol-{result.symbol}-{index}",
-            help=f"Open {result.symbol} in Fetch Analysis",
+            help=f"Open {result.symbol} in Analyse a Stock",
             use_container_width=True,
         ):
             open_symbol_in_fetch_analysis(result.symbol)
@@ -4514,7 +4546,7 @@ def render_vcp_output_ranking_results(results: list[VcpScanResult]) -> None:
         if row[1].button(
             result.symbol,
             key=f"vcp-ranking-symbol-{result.symbol}-{rank}",
-            help=f"Open {result.company} in Fetch Analysis",
+            help=f"Open {result.company} in Analyse a Stock",
             use_container_width=True,
         ):
             open_symbol_in_fetch_analysis(result.symbol)
@@ -4658,7 +4690,7 @@ def render_darvax_pattern_scan_results(
     if not filtered_results:
         st.info("No latest visible pattern matches the selected filters.")
         return
-    st.caption("Click a symbol in the table to open that stock in Fetch Analysis.")
+    st.caption("Click a symbol in the table to open that stock in Analyse a Stock.")
     _render_clickable_darvax_results_table(filtered_results)
     if errors:
         with st.expander("Skipped Stocks"):
@@ -4678,7 +4710,7 @@ def render_vcp_pattern_scan_results(
     if not results:
         st.info("No VCP setup matched the selected score filter.")
         return
-    st.caption("Click a symbol in the table to open that stock in Fetch Analysis.")
+    st.caption("Click a symbol in the table to open that stock in Analyse a Stock.")
     header = st.columns(
         [0.8, 1.4, 0.75, 0.9, 0.9, 0.8, 0.7, 0.6, 0.6, 0.8, 0.75, 0.9, 1.0, 0.8, 0.8, 1.1]
     )
@@ -4726,7 +4758,7 @@ def render_vcp_pattern_scan_results(
         if columns[0].button(
             result.symbol,
             key=f"vcp-result-symbol-{result.symbol}-{index}",
-            help=f"Open {result.company} in Fetch Analysis",
+            help=f"Open {result.company} in Analyse a Stock",
             use_container_width=True,
         ):
             open_symbol_in_fetch_analysis(result.symbol)
@@ -4781,7 +4813,7 @@ def render_shareholding_scan_results(
                 for result in errors[:25]:
                     st.write(f"{result.symbol}: {result.error or 'No Tijori shareholding data.'}")
         return
-    st.caption("Click a symbol in the table to open that stock in Fetch Analysis.")
+    st.caption("Click a symbol in the table to open that stock in Analyse a Stock.")
     header = st.columns([0.9, 2.0, 1, 1.25, 1, 0.8, 0.8, 0.9, 0.9, 0.8])
     headers = [
         "Symbol",
@@ -4802,7 +4834,7 @@ def render_shareholding_scan_results(
         if columns[0].button(
             result.symbol,
             key=f"shareholding-result-symbol-{result.symbol}-{index}",
-            help=f"Open {result.company} in Fetch Analysis",
+            help=f"Open {result.company} in Analyse a Stock",
             use_container_width=True,
         ):
             open_symbol_in_fetch_analysis(result.symbol)
@@ -4869,7 +4901,7 @@ def _render_clickable_darvax_results_table(results: list[PatternScanResult]) -> 
         if columns[0].button(
             result.symbol,
             key=f"darvax-result-symbol-{result.symbol}-{index}",
-            help=f"Open {result.company} in Fetch Analysis",
+            help=f"Open {result.company} in Analyse a Stock",
             use_container_width=True,
         ):
             open_symbol_in_fetch_analysis(result.symbol)
@@ -4884,14 +4916,14 @@ def _render_clickable_darvax_results_table(results: list[PatternScanResult]) -> 
 
 
 def open_symbol_in_fetch_analysis(symbol: str) -> None:
-    """Open a stock symbol in the Fetch Analysis tab."""
+    """Open a stock symbol in the Analyse a Stock tab."""
 
     preserve_shareholding_scan_state()
     preserve_vcp_scan_state()
     st.session_state["pending_fetch_symbol"] = symbol
     st.session_state["pending_fetch_interval"] = "1d"
     st.session_state["pending_fetch_days"] = 180
-    st.session_state["requested_main_tab"] = "Fetch Analysis"
+    st.session_state["requested_main_tab"] = "Analyse a Stock"
     st.rerun()
 
 
@@ -5400,6 +5432,11 @@ def render_options_buying_tab(provider: YahooFinanceMarketProvider) -> None:
         "Deterministic rule engine only. Direction comes from completed candles; "
         "option quote/Greek fields are manual until a trusted NSE option-chain provider is added."
     )
+    st.warning(
+        "Options are high risk. Treat the scanner as idea discovery and the contract check as risk validation: "
+        "confirm max loss, breakeven, liquidity, bid-ask spread and expiry risk before any action."
+    )
+    st.markdown("### Scanner")
     render_options_fno_scanner(provider)
     st.divider()
     st.markdown("### Single Stock Contract Check")
@@ -6289,6 +6326,10 @@ def render_sector_rotation_tab() -> None:
     st.subheader("Sector Rotation Agent")
     st.caption(
         "Detects where sector leadership, breadth, rank and participation are improving now."
+    )
+    st.info(
+        "Plain read: use this page to see where money is moving, what is weakening, and which stocks "
+        "are contributing. Always check the as-of date and stale-data warnings before acting."
     )
     latest_path = REPORT_DIR.parent / "sector_rotation_latest.csv"
     summary_path = REPORT_DIR.parent / "sector_rotation_summary.txt"
@@ -7401,6 +7442,23 @@ def render_astro_research_tab(settings: Settings) -> None:
             st.info("No astro feature rows stored yet.")
         else:
             st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
+def render_research_lab_tab(settings: Settings) -> None:
+    """Render experimental modules away from validated decision tools."""
+
+    st.subheader("Research Lab")
+    st.caption(
+        "Experimental research modules live here. They are useful for exploration, but they do not "
+        "create BUY/SELL decisions, change model scores, override risk or place trades."
+    )
+    st.warning(
+        "Everything in Research Lab is research-only. Validated stock decisions remain in Analyse a "
+        "Stock, Opportunities, Buying Agent, Stock Probability and Sector Rotation."
+    )
+    lab_tabs = st.tabs(["Experimental Astro Research"])
+    with lab_tabs[0]:
+        render_astro_research_tab(settings)
 
 
 def render_astro_chart_reaction_screener(settings: Settings) -> None:
@@ -8792,30 +8850,20 @@ def render_raw_material_impact_tab() -> None:
     top_cols[1].metric("Tracked materials", len(service.materials()))
     top_cols[2].info("Unverified template mappings are shown as Insufficient Data until filing evidence is added.")
 
-    tabs = st.tabs(
-        [
-            "Impact Overview",
-            "Stock Detail",
-            "Raw Material Tracker",
-            "Impact History",
-            "Alerts",
-            "Company-Material Mapping",
-            "Data Quality",
-        ]
-    )
+    tabs = st.tabs(["Overview", "Stock Exposure", "Materials", "Data Quality"])
     with tabs[0]:
         render_raw_material_overview(service)
     with tabs[1]:
         render_raw_material_stock_detail(service)
     with tabs[2]:
         render_raw_material_tracker(service)
+        with st.expander("Impact history", expanded=False):
+            render_raw_material_history(service)
+        with st.expander("Alerts", expanded=False):
+            render_raw_material_alerts(service)
     with tabs[3]:
-        render_raw_material_history(service)
-    with tabs[4]:
-        render_raw_material_alerts(service)
-    with tabs[5]:
-        render_company_material_mapping(service)
-    with tabs[6]:
+        with st.expander("Company-material mapping", expanded=False):
+            render_company_material_mapping(service)
         render_raw_material_quality(service)
 
 
@@ -9329,15 +9377,20 @@ def _ratio_display(value: float | None) -> str:
 
 APP_NAVIGATION = [
     "Opportunities",
-    "Fetch Analysis",
+    "Analyse a Stock",
     "Buying Agent",
     "Quarterly Results",
     "Options Buying",
     "Stock Probability %",
     "Sector Rotation",
     "Raw Material Impact",
-    "Astro Research",
+    "Research Lab",
 ]
+
+NAVIGATION_ALIASES = {
+    "Fetch Analysis": "Analyse a Stock",
+    "Astro Research": "Research Lab",
+}
 
 
 def render_app_header() -> str:
@@ -9381,10 +9434,16 @@ def render_app_header() -> str:
         symbol = symbol_from_label(selected)
         if st.button(f"Open {symbol} analysis", key="global_open_analysis"):
             open_symbol_in_fetch_analysis(symbol)
-    requested = st.session_state.pop("requested_main_tab", None)
+    requested_raw = st.session_state.pop("requested_main_tab", None)
+    requested = NAVIGATION_ALIASES.get(str(requested_raw), requested_raw)
     if requested in APP_NAVIGATION:
         st.session_state["active_main_tab"] = requested
-    if st.session_state.get("active_main_tab") not in APP_NAVIGATION:
+    current_tab = NAVIGATION_ALIASES.get(
+        str(st.session_state.get("active_main_tab", "") or ""),
+        st.session_state.get("active_main_tab"),
+    )
+    st.session_state["active_main_tab"] = current_tab
+    if current_tab not in APP_NAVIGATION:
         st.session_state["active_main_tab"] = "Opportunities"
     active = st.selectbox(
         "Open NATIP page",
@@ -9656,7 +9715,7 @@ def _render_groww_stock_detail(ticker: str, stocks: pd.DataFrame) -> None:
         """,
         unsafe_allow_html=True,
     )
-    if st.button(f"Open {ticker} in Fetch Analysis", key=f"groww_detail_open_{ticker}"):
+    if st.button(f"Open {ticker} in Analyse a Stock", key=f"groww_detail_open_{ticker}"):
         open_symbol_in_fetch_analysis(ticker.replace(".NS", ""))
 
 
@@ -9879,6 +9938,15 @@ def render_quarterly_results_tab() -> None:
         "Fetches permitted Screener latest-result rows, attached PDFs and company quarterly "
         "history. Scores are research-ranking heuristics, not success probabilities."
     )
+    with st.expander("Setup checklist and fallback options", expanded=False):
+        st.markdown(
+            """
+            - Stay logged in to Screener in Chrome before pressing **Update Quarterly Results Data**.
+            - If browser access is blocked, use the manual HTML/text import fallback below.
+            - Revised filings are preserved; duplicate company rows are collapsed in the visible table.
+            - Missing PDF extraction or valuation data lowers confidence instead of inventing values.
+            """
+        )
     store = QuarterlyResultsStore(PROJECT_ROOT / "data" / "quarterly_results")
     max_results = 25
     button_cols = st.columns([1.8, 2.2])
@@ -10395,7 +10463,7 @@ def render_markets_page(provider: YahooFinanceMarketProvider) -> None:
             ["Price", "Change", "Volume", "52W High/Low", "Freshness", "Source"],
             default=["Price", "Change", "Freshness"],
         )
-    _render_empty_state("Market overview not fully configured", "Use Fetch Analysis for stock charts now.")
+    _render_empty_state("Market overview not fully configured", "Use Analyse a Stock for stock charts now.")
 
 
 def render_opportunities_page() -> None:
@@ -10403,6 +10471,10 @@ def render_opportunities_page() -> None:
 
     st.subheader("Opportunities")
     st.caption("Filter, compare and open actionable setups from saved NATIP scans.")
+    st.info(
+        "Primary discovery screen: start here for saved scan output, then open a stock for the reason, "
+        "freshness, risk and next step. If the table is empty, run Buying Agent or Stock Probability first."
+    )
     filters = st.columns(5)
     filters[0].selectbox("Universe", ["Nifty 50", "Nifty 100", "Nifty 250", "Smallcap 250"])
     filters[1].selectbox("Decision", ["All", "Buy Setup", "Watch", "Wait", "Avoid"])
@@ -10605,7 +10677,7 @@ elif active_tab == "Markets":
     render_markets_page(provider)
 elif active_tab == "Opportunities":
     render_opportunities_page()
-elif active_tab == "Fetch Analysis":
+elif active_tab in {"Analyse a Stock", "Fetch Analysis"}:
     render_fetch_analysis(provider, settings)
 elif active_tab == "Buying Agent":
     render_buying_agent(settings)
@@ -10653,8 +10725,8 @@ elif active_tab == "System Health":
     render_system_health_page()
 elif active_tab == "Settings":
     render_settings_page(settings)
-elif active_tab == "Astro Research":
-    render_astro_research_tab(settings)
+elif active_tab in {"Research Lab", "Astro Research"}:
+    render_research_lab_tab(settings)
 else:
     st.session_state["active_main_tab"] = "Opportunities"
     render_opportunities_page()
