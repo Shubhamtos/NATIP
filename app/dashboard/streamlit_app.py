@@ -6599,7 +6599,14 @@ def render_sector_rotation_contribution_drilldown(
     )
 
     with st.spinner(f"Calculating {selected_sector} stock contributors..."):
-        contribution, trajectory = _cached_sector_contributions(selected_sector, as_of)
+        try:
+            contribution, trajectory = _cached_sector_contributions(selected_sector, as_of)
+        except ValueError as exc:
+            st.warning(
+                "Stock-level contribution drill-down is unavailable because the clean "
+                f"constituent cache is not available on this deployment. Details: {exc}"
+            )
+            return
     if contribution.empty:
         st.warning(
             f"No stock-level contribution rows were available for {selected_sector} on {as_of}. "
@@ -6810,7 +6817,10 @@ def _quadrant_contributor_rows(quadrant_rows: pd.DataFrame, as_of: str) -> pd.Da
     rows: list[pd.DataFrame] = []
     for _index, sector_row in quadrant_rows.iterrows():
         sector = str(sector_row["Sector"])
-        contribution, _trajectory = _cached_sector_contributions(sector, as_of)
+        try:
+            contribution, _trajectory = _cached_sector_contributions(sector, as_of)
+        except ValueError:
+            continue
         if contribution.empty:
             continue
         contribution = contribution.copy()
