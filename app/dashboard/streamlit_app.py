@@ -1250,11 +1250,15 @@ def add_full_moon_cycle_overlays(figure: go.Figure, frame: pd.DataFrame) -> None
         if marker_time < timestamps.min() or marker_time > future_until:
             continue
         is_future = marker_time > last_candle_time
+        marker_kind = str(marker.get("kind") or "Full moon cycle")
+        is_new_moon = marker_kind.lower().startswith("new")
+        label_text = "NM" if is_new_moon else "FM"
+        marker_color = "#2563eb" if is_new_moon else "#dc2626"
         figure.add_vline(
             x=marker_time,
             line_width=1,
             line_dash="dot",
-            line_color="#dc2626",
+            line_color=marker_color,
             row=1,
             col=1,
         )
@@ -1264,18 +1268,19 @@ def add_full_moon_cycle_overlays(figure: go.Figure, frame: pd.DataFrame) -> None
                 y=[float(frame["high"].max())],
                 mode="markers+text" if is_future else "markers",
                 marker={
-                    "color": "#dc2626",
+                    "color": marker_color,
                     "size": 10 if is_future else 9,
                     "symbol": "circle-open",
                 },
-                text=["FM"] if is_future else None,
-                textfont={"color": "#dc2626", "size": 10},
+                text=[label_text] if is_future else None,
+                textfont={"color": marker_color, "size": 10},
                 textposition="bottom center",
-                name="Upcoming full moon" if is_future else "Full moon cycle",
+                name=f"Upcoming {marker_kind}" if is_future else marker_kind,
                 hovertemplate=(
-                    f"{'Upcoming ' if is_future else ''}Full moon cycle marker<br>"
+                    f"{'Upcoming ' if is_future else ''}{marker_kind} marker<br>"
                     f"Date: {marker['date']}<br>"
                     f"Lunar illumination: {marker['illumination']:.1%}<br>"
+                    f"Calculation: {marker.get('calculation', 'skyfield_jpl_ephemeris')}<br>"
                     "Research marker only; not a BUY/SELL signal<extra></extra>"
                 ),
                 showlegend=False,
@@ -1850,7 +1855,7 @@ def cached_full_moon_cycle_markers(
 
     path = Path(ephemeris_path)
     if not path.exists():
-        return []
+        return approximate_lunar_cycle_markers(start_date_iso, end_date_iso)
     start = datetime.fromisoformat(start_date_iso).replace(tzinfo=UTC) - timedelta(days=2)
     end = datetime.fromisoformat(end_date_iso).replace(tzinfo=UTC) + timedelta(days=2)
     provider = SkyfieldPositionProvider(path)
@@ -1888,6 +1893,44 @@ def cached_full_moon_cycle_markers(
             if start.date() <= marker_time.date() <= end.date():
                 markers.append(row)
     return markers
+
+
+def approximate_lunar_cycle_markers(start_date_iso: str, end_date_iso: str) -> list[dict[str, Any]]:
+    """Return deterministic approximate full/new moon markers without Skyfield.
+
+    This keeps the deployed chart informative when the precise JPL ephemeris is
+    unavailable. Precise local/production installations still use Skyfield above.
+    """
+
+    start = datetime.fromisoformat(start_date_iso).replace(tzinfo=UTC) - timedelta(days=2)
+    end = datetime.fromisoformat(end_date_iso).replace(tzinfo=UTC) + timedelta(days=2)
+    synodic_days = 29.530588853
+    known_new_moon = datetime(2000, 1, 6, 18, 14, tzinfo=UTC)
+    rows: list[dict[str, Any]] = []
+    cycle_index = math.floor((start - known_new_moon).total_seconds() / 86400 / synodic_days) - 1
+    while True:
+        new_moon = known_new_moon + timedelta(days=cycle_index * synodic_days)
+        full_moon = new_moon + timedelta(days=synodic_days / 2)
+        for marker_time, kind, illumination in (
+            (new_moon, "New moon cycle", 0.0),
+            (full_moon, "Full moon cycle", 1.0),
+        ):
+            if start <= marker_time <= end:
+                rows.append(
+                    {
+                        "timestamp": marker_time.isoformat(),
+                        "date": marker_time.date().isoformat(),
+                        "distance_from_full": 180.0 if kind.startswith("New") else 0.0,
+                        "illumination": illumination,
+                        "kind": kind,
+                        "calculation": "approximate_synodic_cycle",
+                    }
+                )
+        if new_moon > end + timedelta(days=synodic_days):
+            break
+        cycle_index += 1
+    rows.sort(key=lambda item: item["timestamp"])
+    return rows
 
 
 def add_darvax_pattern_overlays(
