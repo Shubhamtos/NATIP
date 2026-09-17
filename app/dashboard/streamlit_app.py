@@ -15,7 +15,6 @@ from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, unquote
 from zoneinfo import ZoneInfo
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -458,36 +457,6 @@ st.markdown(
       }
       .stAlert {
         border-radius: 8px;
-      }
-      .natip-link-nav {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin: 12px 0 6px;
-      }
-      .natip-link-nav a {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        padding: 9px 13px;
-        border-radius: 8px;
-        border: 1px solid var(--natip-border);
-        background: #ffffff;
-        color: var(--natip-text);
-        text-decoration: none;
-        font-weight: 750;
-        font-size: .88rem;
-        min-height: 40px;
-      }
-      .natip-link-nav a:hover {
-        border-color: var(--natip-primary);
-        color: var(--natip-primary-hover);
-        background: #f0fbf7;
-      }
-      .natip-link-nav a.active {
-        background: var(--natip-primary);
-        border-color: var(--natip-primary);
-        color: #ffffff;
       }
       .groww-shell {
         font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -9315,29 +9284,6 @@ APP_NAVIGATION = [
 ]
 
 
-def _query_param_value(name: str) -> str | None:
-    """Return a single query-param value across Streamlit versions."""
-
-    try:
-        value = st.query_params.get(name)
-    except Exception:
-        value = None
-    if isinstance(value, list):
-        return str(value[0]) if value else None
-    if value is not None:
-        return str(value)
-    try:
-        legacy = st.experimental_get_query_params()
-    except Exception:
-        return None
-    legacy_value = legacy.get(name)
-    if isinstance(legacy_value, list):
-        return str(legacy_value[0]) if legacy_value else None
-    if legacy_value is not None:
-        return str(legacy_value)
-    return None
-
-
 def render_app_header() -> str:
     """Render global NATIP shell header."""
 
@@ -9382,21 +9328,15 @@ def render_app_header() -> str:
     requested = st.session_state.pop("requested_main_tab", None)
     if requested in APP_NAVIGATION:
         st.session_state["active_main_tab"] = requested
-    query_tab = _query_param_value("tab")
-    if query_tab:
-        decoded_tab = unquote(query_tab)
-        if decoded_tab in APP_NAVIGATION:
-            st.session_state["active_main_tab"] = decoded_tab
     if st.session_state.get("active_main_tab") not in APP_NAVIGATION:
         st.session_state["active_main_tab"] = "Opportunities"
-    active = str(st.session_state["active_main_tab"])
-    nav_links = []
-    for label in APP_NAVIGATION:
-        class_name = "active" if label == active else ""
-        nav_links.append(
-            f'<a class="{class_name}" href="?tab={quote(label)}">{html.escape(label)}</a>'
-        )
-    st.markdown(f'<nav class="natip-link-nav">{"".join(nav_links)}</nav>', unsafe_allow_html=True)
+    active = st.selectbox(
+        "Open NATIP page",
+        APP_NAVIGATION,
+        index=APP_NAVIGATION.index(str(st.session_state["active_main_tab"])),
+        key="main_navigation_selectbox",
+        label_visibility="visible",
+    )
     st.session_state["active_main_tab"] = active
     st.divider()
     st.markdown("</div>", unsafe_allow_html=True)
