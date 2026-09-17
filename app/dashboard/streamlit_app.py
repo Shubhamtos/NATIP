@@ -9343,10 +9343,10 @@ def render_app_header() -> str:
                     type="primary" if label == active else "secondary",
                 ):
                     st.session_state["active_main_tab"] = label
-                    st.rerun()
+                    active = label
     st.divider()
     st.markdown("</div>", unsafe_allow_html=True)
-    return str(st.session_state["active_main_tab"])
+    return active
 
 
 def render_sidebar_status() -> None:
