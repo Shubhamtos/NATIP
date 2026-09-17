@@ -9330,20 +9330,16 @@ def render_app_header() -> str:
         st.session_state["active_main_tab"] = requested
     if st.session_state.get("active_main_tab") not in APP_NAVIGATION:
         st.session_state["active_main_tab"] = "Opportunities"
-    active = str(st.session_state["active_main_tab"])
-    for row_start in range(0, len(APP_NAVIGATION), 6):
-        row_items = APP_NAVIGATION[row_start : row_start + 6]
-        columns = st.columns(len(row_items))
-        for column, label in zip(columns, row_items, strict=True):
-            with column:
-                if st.button(
-                    label,
-                    key=f"main_nav_{label}",
-                    use_container_width=True,
-                    type="primary" if label == active else "secondary",
-                ):
-                    st.session_state["active_main_tab"] = label
-                    active = label
+    current_index = APP_NAVIGATION.index(str(st.session_state["active_main_tab"]))
+    active = st.radio(
+        "Main navigation",
+        APP_NAVIGATION,
+        index=current_index,
+        horizontal=True,
+        key="main_navigation_radio",
+        label_visibility="collapsed",
+    )
+    st.session_state["active_main_tab"] = active
     st.divider()
     st.markdown("</div>", unsafe_allow_html=True)
     return active
