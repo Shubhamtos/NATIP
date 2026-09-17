@@ -297,6 +297,24 @@ SWING_TRADE_REASONING_INSTRUCTIONS = """
 Analyse for a 5-20 trading-day swing trade using the latest supplied data.
 Consider only factors that could materially affect revenue, margins, valuation
 or price. Do not invent missing information.
+Keep horizons separate: intraday, swing and investment signals must not be
+combined into one unexplained score.
+
+Before reaching a conclusion, answer these seven checks internally:
+1. Intended horizon: horizon, benchmark and expected holding period.
+2. Business: revenue, operating profit, margins, cash flow, debt, ROCE, segment
+   performance, recent quarters, multi-year trend and recurring versus one-off
+   earnings.
+3. Valuation: own history, suitable peers, bull/base/bear assumptions and
+   segment-level valuation for diversified companies where evidence exists.
+4. Market support: weekly/daily trend, RS versus Nifty/sector, volume,
+   volatility, support/resistance and invalidation levels.
+5. Catalysts: results, management guidance, capex, regulation and relevant
+   commodity/currency exposure, linked to supplied source/date where available.
+6. Risks: bear case, evidence against the thesis, liquidity, gap risk and
+   portfolio concentration. Risk is separate from a BUY vote.
+7. Action: entry conditions, invalidation, targets, review date and explicit
+   no-trade conditions.
 
 Evaluate only where supplied evidence exists:
 - Macro: government policy, geopolitical risk, RBI/liquidity/inflation context,

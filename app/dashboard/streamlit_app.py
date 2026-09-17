@@ -161,6 +161,22 @@ DEFAULT_REASONING_RULES = """Use NATIP's two-stage process.
 Do not invent prices, financial data, macro data, news, or events.
 Mention missing or stale data clearly.
 Respect risk-agent red flags.
+Keep horizons separate: intraday, swing and investment signals must not be
+combined into one unexplained score.
+For every stock, check:
+1. Intended horizon, benchmark and expected holding period.
+2. Business quality: revenue, operating profit, margins, cash flow, debt, ROCE,
+   segment performance, recent quarters and multi-year trend.
+3. Valuation: company history, suitable peers, bull/base/bear assumptions and
+   segment-level valuation where relevant.
+4. Market confirmation: weekly/daily trend, relative strength versus Nifty and
+   sector, volume, volatility, support/resistance and invalidation.
+5. Catalysts: results, guidance, capex, regulation, commodity/currency exposure,
+   source and date.
+6. Risk: bear case, evidence against the thesis, liquidity, gap risk and
+   concentration. Keep risk assessment separate from a BUY vote.
+7. Action requirements: entry conditions, invalidation, target scenarios, review
+   date and explicit no-trade conditions.
 Recommend only when evidence quality, liquidity, risk-reward, and horizon suitability are acceptable.
 Always keep the output research-only and not a return guarantee."""
 
@@ -2329,6 +2345,66 @@ def render_decision_readiness(
     st.dataframe(frame, use_container_width=True, hide_index=True)
 
 
+def render_investment_analysis_framework() -> None:
+    """Render the NATIP stock-analysis framework used by reasoning agents."""
+
+    rows = [
+        {
+            "Question": "What is the intended horizon?",
+            "What NATIP checks": (
+                "Intraday, swing or investment horizon; benchmark; expected holding "
+                "period; no mixing of different horizon signals into one unexplained score."
+            ),
+        },
+        {
+            "Question": "What is happening in the business?",
+            "What NATIP checks": (
+                "Revenue, operating profit, margins, cash flow, debt, ROCE and segment "
+                "performance across recent quarters and multiple years; recurring earnings "
+                "separated from one-offs."
+            ),
+        },
+        {
+            "Question": "Is the valuation attractive?",
+            "What NATIP checks": (
+                "Multiples versus company history and suitable peers; bull/base/bear "
+                "assumptions; segment-level view for diversified companies when data exists."
+            ),
+        },
+        {
+            "Question": "Does the market support the thesis?",
+            "What NATIP checks": (
+                "Weekly/daily trend, relative strength versus Nifty and sector, volume "
+                "confirmation, volatility, support, resistance and invalidation levels."
+            ),
+        },
+        {
+            "Question": "What could change the outlook?",
+            "What NATIP checks": (
+                "Results, guidance, capex, regulation and commodity/currency exposure, "
+                "with source/date whenever supplied."
+            ),
+        },
+        {
+            "Question": "What could go wrong?",
+            "What NATIP checks": (
+                "Bear case, evidence against the thesis, liquidity, gap risk and portfolio "
+                "concentration; risk kept separate from the BUY vote."
+            ),
+        },
+        {
+            "Question": "What would justify action?",
+            "What NATIP checks": (
+                "Entry conditions, invalidation, target scenarios, review date and explicit "
+                "no-trade conditions."
+            ),
+        },
+    ]
+    with st.expander("Investment Analysis Framework", expanded=False):
+        st.caption("This framework is also included in Gemini/rule reasoning prompts.")
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
 def render_screener_fundamentals(report_data: dict[str, Any]) -> None:
     """Render Screener fundamentals in Fetch Analysis."""
 
@@ -3115,6 +3191,7 @@ def render_single_stock_dashboard() -> None:
             decision=decision,
             settings=settings,
         )
+        render_investment_analysis_framework()
     decision = st.session_state["decision"]
     signals = {signal.category: signal for signal in decision.signals}
 
