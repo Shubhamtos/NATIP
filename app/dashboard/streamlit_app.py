@@ -6880,7 +6880,10 @@ def _render_quadrant_contributor_table(frame: pd.DataFrame, *, key: str) -> None
 def _cached_sector_contributions(sector: str, as_of: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Cached wrapper for sector constituent contribution calculation."""
 
-    return calculate_sector_stock_contributions(sector=sector, as_of_date=as_of)
+    try:
+        return calculate_sector_stock_contributions(sector=sector, as_of_date=as_of)
+    except ValueError:
+        return pd.DataFrame(), pd.DataFrame()
 
 
 def _selected_sector_from_rotation_chart(plot_selection: Any, table: pd.DataFrame) -> str | None:
