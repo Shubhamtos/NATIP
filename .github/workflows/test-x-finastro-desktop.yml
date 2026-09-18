@@ -2,8 +2,6 @@ name: Test X FinAstro Desktop
 
 on:
   push:
-    branches:
-      - feature/x-finastro-desktop-scraper
     paths:
       - "x_finastro_desktop/**"
       - ".github/workflows/test-x-finastro-desktop.yml"
@@ -25,7 +23,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - name: Compile application
-        run: python -m py_compile app.py scraper.py finastro.py
+        run: python -m py_compile app.py scraper.py finastro.py streamlit_app.py
       - name: Smoke-test classifier
         run: |
           python - <<'PY'
