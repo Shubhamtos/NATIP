@@ -6,6 +6,8 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 
+from app.agentic.gateway import AgenticGateway, build_agentic_gateway
+from app.agentic.schemas import AgentRunRequest, AgentRunResponse
 from app.agents import AgentContext
 from app.evidence import EvidenceRecord
 from app.providers.market import HistoricalDataRequest
@@ -13,7 +15,7 @@ from app.runtime import AppRuntime, runtime
 from app.intelligence.raw_material.service import RawMaterialImpactService
 from app.models import CompanyRawMaterialMapping
 
-app = FastAPI(title="NATIP", version="0.1.0")
+app = FastAPI(title="NATIP", version="0.2.0")
 
 
 def get_runtime() -> AppRuntime:
@@ -24,6 +26,15 @@ def get_runtime() -> AppRuntime:
     """
 
     return runtime
+
+
+def get_agentic_gateway() -> AgenticGateway:
+    """Build and return the Gemini-backed NATIP agentic gateway."""
+
+    try:
+        return build_agentic_gateway()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 def get_raw_material_service() -> RawMaterialImpactService:
@@ -55,6 +66,16 @@ async def health(runtime_dependency: Annotated[AppRuntime, Depends(get_runtime)]
         "environment": runtime_dependency.settings.environment,
         "provider": runtime_dependency.market_provider.name,
     }
+
+
+@app.post("/agent/run", response_model=AgentRunResponse)
+async def run_agentic_request(
+    request: AgentRunRequest,
+    gateway: Annotated[AgenticGateway, Depends(get_agentic_gateway)],
+) -> AgentRunResponse:
+    """Execute one controlled Gemini-backed NATIP agentic workflow."""
+
+    return await gateway.run(request)
 
 
 @app.get("/market/quote/{symbol}")
