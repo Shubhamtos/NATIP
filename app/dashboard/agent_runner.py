@@ -230,17 +230,13 @@ async def _enhance_agent_signals(
             rules=rules,
         )
     except GeminiReasoningError as exc:
-        return [
-            signal.model_copy(
-                update={
-                    "reasons": [
-                        *signal.reasons,
-                        f"Gemini reasoning unavailable for {signal.category}: {exc}",
-                    ]
-                }
-            )
-            for signal in signals
-        ]
+        return await _enhance_agent_signals_individually(
+            signals=signals,
+            client=client,
+            market_payload=market_payload,
+            rules=rules,
+            batch_error=exc,
+        )
 
     reasoning_by_category = {
         _canonical_agent_category(reasoning.category): reasoning for reasoning in reasonings
@@ -258,6 +254,43 @@ async def _enhance_agent_signals(
         )
         for signal in signals
     ]
+
+
+async def _enhance_agent_signals_individually(
+    *,
+    signals: list[AgentSignal],
+    client: GeminiReasoningClient,
+    market_payload: dict[str, object],
+    rules: str,
+    batch_error: GeminiReasoningError,
+) -> list[AgentSignal]:
+    """Fallback to one Gemini request per agent when the batch payload is invalid."""
+
+    enhanced: list[AgentSignal] = []
+    for signal in signals:
+        try:
+            reasoning = await client.explain_agent_signal(
+                signal=signal,
+                market_payload=market_payload,
+                rules=rules,
+            )
+        except GeminiReasoningError as exc:
+            enhanced.append(
+                signal.model_copy(
+                    update={
+                        "reasons": [
+                            *signal.reasons,
+                            (
+                                f"Gemini reasoning unavailable for {signal.category}: "
+                                f"batch failed ({batch_error}); single-agent retry failed ({exc})"
+                            ),
+                        ]
+                    }
+                )
+            )
+            continue
+        enhanced.append(signal.model_copy(update=_signal_update_from_reasoning(signal, reasoning)))
+    return enhanced
 
 
 async def _enhance_buying_recommendation(

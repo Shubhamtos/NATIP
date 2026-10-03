@@ -172,13 +172,15 @@ def test_dashboard_has_state_driven_top_level_sections() -> None:
         contents = file.read()
 
     for section in [
-        '"Fetch Analysis"',
+        '"Analyse a Stock"',
         '"Buying Agent"',
-        '"Stock Probability %"',
+        '"Stock Probability"',
         '"Sector Rotation"',
-        '"Promoter Linkage"',
+        '"Research Lab"',
     ]:
         assert section in contents
+    assert "natip-top-nav" in contents
+    assert "Open NATIP page" not in contents
     assert "render_stock_probability_tab" in contents
     assert "Ranks stocks by modeled probability of outperforming Nifty 50" in contents
     assert "active_main_tab" in contents
@@ -250,7 +252,7 @@ def test_dashboard_has_state_driven_top_level_sections() -> None:
     assert "Only the latest available Screener concall transcript is reviewed." in contents
     assert "Technical Analysis" in contents
     assert "Agent Consensus" in contents
-    assert "Data Quality" in contents
+    assert "Data and sources" in contents
     assert "Filter latest visible pattern" in contents
     assert "Test Gemini" in contents
     assert "gemini-2.0-flash" not in contents

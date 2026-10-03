@@ -7,6 +7,7 @@ import hashlib
 import html
 import json
 import math
+import os
 import subprocess
 import sys
 import time
@@ -181,6 +182,10 @@ Recommend only when evidence quality, liquidity, risk-reward, and horizon suitab
 Always keep the output research-only and not a return guarantee."""
 
 IST = ZoneInfo("Asia/Kolkata")
+STREAMLIT_SECRET_PATHS = (
+    Path.home() / ".streamlit" / "secrets.toml",
+    PROJECT_ROOT / ".streamlit" / "secrets.toml",
+)
 
 ASTRO_INDEX_UNIVERSE: tuple[tuple[str, str], ...] = (
     ("^NSEI", "Nifty 50"),
@@ -202,8 +207,8 @@ st.markdown(
     """
     <style>
       :root {
-        --natip-primary: #007f5f;
-        --natip-primary-hover: #00684f;
+        --natip-primary: #0F766E;
+        --natip-primary-hover: #115E59;
         --natip-positive: #067647;
         --natip-negative: #b42318;
         --natip-warning: #b54708;
@@ -217,6 +222,9 @@ st.markdown(
         --natip-red: #d92d20;
         --natip-green: #039855;
         --natip-shadow: 0 8px 24px rgba(16, 24, 40, 0.06);
+        --natip-nav-inactive-bg: #ECFDF5;
+        --natip-nav-inactive-text: #134E4A;
+        --natip-nav-border: #CBD5E1;
       }
       .stApp {
         background: var(--natip-bg);
@@ -461,6 +469,58 @@ st.markdown(
       .groww-shell {
         font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
+      .natip-top-nav {
+        position: sticky;
+        top: 0;
+        z-index: 999;
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 8px;
+        overflow-x: auto;
+        padding: 10px 2px 12px;
+        margin: 4px 0 14px;
+        background: rgba(246, 248, 250, 0.96);
+        border-bottom: 1px solid var(--natip-nav-border);
+        backdrop-filter: blur(10px);
+      }
+      .natip-nav-tab {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        flex: 0 0 auto;
+        min-height: 42px;
+        padding: 9px 13px;
+        border-radius: 8px;
+        border: 1px solid var(--natip-nav-border);
+        background: var(--natip-nav-inactive-bg);
+        color: var(--natip-nav-inactive-text) !important;
+        font-weight: 800;
+        font-size: .88rem;
+        text-decoration: none !important;
+        white-space: nowrap;
+        transition: background .15s ease, color .15s ease, border-color .15s ease, transform .15s ease;
+      }
+      .natip-nav-tab:hover {
+        background: #CCFBF1;
+        border-color: var(--natip-primary);
+        color: #0F3F3A !important;
+        transform: translateY(-1px);
+      }
+      .natip-nav-tab:focus-visible {
+        outline: 3px solid #99F6E4;
+        outline-offset: 2px;
+      }
+      .natip-nav-tab.active {
+        background: var(--natip-primary);
+        border-color: var(--natip-primary-hover);
+        color: #FFFFFF !important;
+        box-shadow: 0 8px 18px rgba(15, 118, 110, .22);
+      }
+      .natip-nav-icon {
+        font-size: 1rem;
+        line-height: 1;
+      }
       .groww-topbar {
         display: flex;
         align-items: center;
@@ -609,6 +669,14 @@ st.markdown(
         .groww-tool-grid {
           grid-template-columns: 1fr;
         }
+        .natip-top-nav {
+          flex-wrap: nowrap;
+          padding-bottom: 10px;
+        }
+        .natip-nav-tab {
+          font-size: .82rem;
+          min-height: 40px;
+        }
       }
     </style>
     """,
@@ -680,6 +748,12 @@ def cached_shareholding_report(symbol: str, company: str) -> ScreenerFundamental
 def fetch_concall_summary(symbol: str) -> dict[str, Any]:
     """Fetch latest Screener concall transcript summary and cache it."""
 
+    return _fetch_concall_summary_uncached(symbol)
+
+
+def _fetch_concall_summary_uncached(symbol: str) -> dict[str, Any]:
+    """Fetch latest Screener concall transcript summary without Streamlit cache."""
+
     cleaned_symbol = symbol.strip().upper().replace(".NS", "")
     try:
         report = ScreenerFundamentalProvider().fetch_concall_transcripts(cleaned_symbol)
@@ -690,6 +764,32 @@ def fetch_concall_summary(symbol: str) -> dict[str, Any]:
             "source_url": f"https://www.screener.in/company/{cleaned_symbol}/",
         }
     return report.model_dump(mode="json")
+
+
+async def fetch_concall_summary_with_timeout(symbol: str, timeout_seconds: float = 12.0) -> dict[str, Any]:
+    """Fetch concall summary without blocking the whole stock-analysis workflow."""
+
+    cleaned_symbol = symbol.strip().upper().replace(".NS", "")
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_fetch_concall_summary_uncached, cleaned_symbol),
+            timeout=timeout_seconds,
+        )
+    except TimeoutError:
+        return {
+            "symbol": cleaned_symbol,
+            "error": (
+                f"Screener concall fetch timed out after {timeout_seconds:.0f}s. "
+                "Charts and agent reasoning continued without concall data."
+            ),
+            "source_url": f"https://www.screener.in/company/{cleaned_symbol}/",
+        }
+    except Exception as exc:
+        return {
+            "symbol": cleaned_symbol,
+            "error": str(exc),
+            "source_url": f"https://www.screener.in/company/{cleaned_symbol}/",
+        }
 
 
 @st.cache_data(ttl=60 * 60 * 6)
@@ -956,9 +1056,50 @@ def configured_gemini_api_key(settings: Settings) -> str | None:
     session_key = str(st.session_state.get("gemini_api_key", "")).strip()
     if session_key:
         return session_key
+    if streamlit_secrets_file_exists():
+        for key_name in (
+            "NATIP_GEMINI_API_KEY",
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+            "GOOGLE_GENERATIVE_AI_API_KEY",
+        ):
+            try:
+                secret_value = st.secrets.get(key_name)
+            except Exception:
+                secret_value = None
+            if secret_value:
+                return str(secret_value).strip()
     if settings.gemini_api_key is None:
         return None
     return settings.gemini_api_key.get_secret_value()
+
+
+def streamlit_secrets_file_exists() -> bool:
+    """Return whether Streamlit secrets can be read without missing-file warnings."""
+
+    return any(path.exists() for path in STREAMLIT_SECRET_PATHS)
+
+
+def gemini_configuration_source(settings: Settings) -> str:
+    """Return non-secret Gemini key source for status display."""
+
+    if str(st.session_state.get("gemini_api_key", "")).strip():
+        return "Session"
+    if streamlit_secrets_file_exists():
+        for key_name in (
+            "NATIP_GEMINI_API_KEY",
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+            "GOOGLE_GENERATIVE_AI_API_KEY",
+        ):
+            try:
+                if st.secrets.get(key_name):
+                    return "Streamlit secrets"
+            except Exception:
+                continue
+    if settings.gemini_api_key is not None:
+        return "Environment/.env"
+    return "Not configured"
 
 
 def gemini_enabled(settings: Settings) -> bool:
@@ -988,6 +1129,13 @@ def gemini_key_fingerprint(settings: Settings) -> str:
     if not active_key:
         return "none"
     return hashlib.sha256(active_key.encode("utf-8")).hexdigest()[:12]
+
+
+def clear_agent_reasoning_cache() -> None:
+    """Clear only cached agent reasoning so charts and fetched data remain available."""
+
+    for key in ("decision", "decision_symbol", "decision_cache_key"):
+        st.session_state.pop(key, None)
 
 
 def bars_to_frame(bars: list[HistoricalBar]) -> pd.DataFrame:
@@ -1182,9 +1330,12 @@ def render_candlestick(frame: pd.DataFrame, symbol: str, interval: str) -> None:
                 col=1,
             )
     add_darvax_pattern_overlays(figure, frame, patterns, labels=price_labels)
-    add_full_moon_cycle_overlays(figure, frame)
-    add_planet_alignment_overlays(figure, frame)
-    add_astro_trend_change_overlays(figure, frame)
+    if st.session_state.get("chart_show_full_moon", False):
+        add_full_moon_cycle_overlays(figure, frame)
+    if st.session_state.get("chart_show_planet_alignment", False):
+        add_planet_alignment_overlays(figure, frame, min_bodies=4)
+    if st.session_state.get("chart_show_astro_trend_windows", False):
+        add_astro_trend_change_overlays(figure, frame)
     figure.add_trace(
         go.Bar(
             x=frame["timestamp"],
@@ -1252,8 +1403,10 @@ def add_full_moon_cycle_overlays(figure: go.Figure, frame: pd.DataFrame) -> None
         is_future = marker_time > last_candle_time
         marker_kind = str(marker.get("kind") or "Full moon cycle")
         is_new_moon = marker_kind.lower().startswith("new")
-        label_text = "NM" if is_new_moon else "FM"
-        marker_color = "#2563eb" if is_new_moon else "#dc2626"
+        if is_new_moon:
+            continue
+        label_text = "FM"
+        marker_color = "#dc2626"
         figure.add_vline(
             x=marker_time,
             line_width=1,
@@ -1290,7 +1443,12 @@ def add_full_moon_cycle_overlays(figure: go.Figure, frame: pd.DataFrame) -> None
         )
 
 
-def add_planet_alignment_overlays(figure: go.Figure, frame: pd.DataFrame) -> None:
+def add_planet_alignment_overlays(
+    figure: go.Figure,
+    frame: pd.DataFrame,
+    *,
+    min_bodies: int = 4,
+) -> None:
     """Add multi-planet alignment markers to the Fetch Analysis price chart."""
 
     if frame.empty or "timestamp" not in frame.columns:
@@ -1306,6 +1464,7 @@ def add_planet_alignment_overlays(figure: go.Figure, frame: pd.DataFrame) -> Non
             str(settings.astro_ephemeris_path),
             timestamps.min().date().isoformat(),
             future_until.date().isoformat(),
+            min_bodies=min_bodies,
         )
     except Exception:
         return
@@ -1316,6 +1475,8 @@ def add_planet_alignment_overlays(figure: go.Figure, frame: pd.DataFrame) -> Non
     for marker in markers:
         marker_time = pd.Timestamp(marker["timestamp"])
         if marker_time < timestamps.min() or marker_time > future_until:
+            continue
+        if int(marker.get("body_count", 0)) < min_bodies:
             continue
         is_future = marker_time > last_candle_time
         figure.add_vline(
@@ -2473,7 +2634,10 @@ def render_screener_fundamentals(report_data: dict[str, Any]) -> None:
         return
 
     report = ScreenerFundamentalReport.model_validate(report_data)
-    st.caption(f"Source: {report.source_url} · fetched at {report.fetched_at.isoformat()}")
+    st.caption(f"Source: {report.source_url} · {_relative_time_display(report.fetched_at)}")
+    with st.expander("Exact source timestamp", expanded=False):
+        st.write(report.fetched_at.isoformat())
+    st.markdown("#### Latest Metrics")
     if report.ratios:
         ratio_items = list(report.ratios.items())[:12]
         ratio_columns = st.columns(4)
@@ -2491,16 +2655,11 @@ def render_screener_fundamentals(report_data: dict[str, Any]) -> None:
     else:
         st.warning("Latest shareholding percentages were not visible on Screener.")
 
+    st.markdown("#### Main Financial Tables")
     if report.pros or report.cons:
-        pros_col, cons_col = st.columns(2)
-        with pros_col.container(border=True):
-            st.markdown("**Pros**")
-            for item in report.pros or ["Not visible on Screener page."]:
-                st.write(item)
-        with cons_col.container(border=True):
-            st.markdown("**Cons**")
-            for item in report.cons or ["Not visible on Screener page."]:
-                st.write(item)
+        trend_expander = st.expander("Key trends and interpretation", expanded=False)
+    else:
+        trend_expander = st.expander("Key trends and interpretation", expanded=False)
 
     table_order = [
         "Quarters",
@@ -2521,6 +2680,19 @@ def render_screener_fundamentals(report_data: dict[str, Any]) -> None:
                     use_container_width=True,
                     hide_index=True,
                 )
+    else:
+        st.info("No detailed Screener financial tables were visible for this stock.")
+
+    with trend_expander:
+        pros_col, cons_col = st.columns(2)
+        with pros_col.container(border=True):
+            st.markdown("**What looks supportive**")
+            for item in report.pros or ["N/A — Screener did not expose a clear positive trend."]:
+                st.write(item)
+        with cons_col.container(border=True):
+            st.markdown("**What needs caution**")
+            for item in report.cons or ["N/A — Screener did not expose a clear caution item."]:
+                st.write(item)
     if report.missing_data:
         with st.expander("Missing Screener Fields", expanded=False):
             for item in report.missing_data:
@@ -2688,9 +2860,15 @@ def _numeric_from_screener_value(value: Any) -> float | None:
 def render_agent_reasoning(signals: dict[str, AgentSignal], settings: Settings) -> None:
     """Render visible agent-wise Gemini reasoning in Fetch Analysis."""
 
+    gemini_failures = [
+        reason
+        for signal in signals.values()
+        for reason in signal.reasons
+        if reason.startswith("Gemini reasoning unavailable")
+    ]
     ai_label = (
         f"Gemini aligned · {gemini_model(settings)}"
-        if gemini_enabled(settings)
+        if gemini_enabled(settings) and not gemini_failures
         else "Rule-based reasoning"
     )
     st.markdown(
@@ -2709,8 +2887,20 @@ def render_agent_reasoning(signals: dict[str, AgentSignal], settings: Settings) 
     )
     if not gemini_enabled(settings):
         st.warning(
-            "Gemini is not enabled. Add NATIP_GEMINI_API_KEY in your local .env to enable it."
+            "Gemini enhanced reasoning: Unavailable. Using rule-based fallback. "
+            "Configure NATIP_GEMINI_API_KEY in Streamlit secrets or local .env to enable it."
         )
+    elif gemini_failures:
+        st.warning(
+            "Gemini is configured, but the latest reasoning request failed. NATIP is showing "
+            "deterministic rule-based reasoning below. Open AI reasoning setup to test the key/model."
+        )
+    else:
+        st.success(
+            f"Gemini enhanced reasoning: Available via {gemini_configuration_source(settings)}. "
+            "Gemini explains evidence only and does not change deterministic scores."
+        )
+    render_fetch_gemini_setup(settings)
 
     ordered_agents = [
         ("macro", "Macro Conditions"),
@@ -2732,6 +2922,89 @@ def render_agent_reasoning(signals: dict[str, AgentSignal], settings: Settings) 
             render_agent_reasoning_card(label, signals.get(category))
 
 
+def render_fetch_gemini_setup(settings: Settings) -> None:
+    """Render compact Gemini setup controls inside Fetch Analysis."""
+
+    with st.expander("AI reasoning setup", expanded=False):
+        active_key = configured_gemini_api_key(settings)
+        status_cols = st.columns(3)
+        status_cols[0].metric("Gemini key", "Configured" if active_key else "Missing")
+        status_cols[1].metric("Source", gemini_configuration_source(settings))
+        status_cols[2].metric("Model", gemini_model(settings))
+        st.caption(
+            "Gemini only improves the written reasoning. It does not change deterministic "
+            "agent scores, chart data, BUY/SELL labels or risk guardrails."
+        )
+        enabled = st.checkbox(
+            "Use Gemini for agent reasoning",
+            value=gemini_enabled(settings),
+            disabled=not bool(active_key),
+            key="fetch_gemini_enabled",
+        )
+        if active_key:
+            st.session_state["gemini_enabled"] = enabled
+        else:
+            st.info("Paste a Gemini key below or set NATIP_GEMINI_API_KEY in Streamlit secrets/.env.")
+
+        model_options = [
+            "gemini-2.5-flash",
+            "gemini-flash-lite-latest",
+            "gemini-2.5-flash-lite",
+            "gemini-flash-latest",
+            "gemini-pro-latest",
+        ]
+        current_model = gemini_model(settings)
+        if current_model not in model_options:
+            model_options.insert(0, current_model)
+        st.selectbox(
+            "Gemini model",
+            options=model_options,
+            index=model_options.index(current_model),
+            key="gemini_model",
+        )
+
+        entered_key = st.text_input(
+            "Gemini API key",
+            type="password",
+            placeholder="Paste key for this local session",
+            key="fetch_gemini_api_key_input",
+        )
+        action_cols = st.columns([1, 1, 1.4])
+        if action_cols[0].button("Save key", key="fetch_save_gemini_key"):
+            if entered_key.strip():
+                st.session_state["gemini_api_key"] = entered_key.strip()
+                st.session_state["gemini_enabled"] = True
+                clear_agent_reasoning_cache()
+                st.success("Gemini key saved. Run analysis again to refresh agent reasoning.")
+                st.rerun()
+            else:
+                st.warning("Paste a Gemini API key before saving.")
+        if action_cols[1].button("Clear key", key="fetch_clear_gemini_key"):
+            st.session_state.pop("gemini_api_key", None)
+            st.session_state["gemini_enabled"] = False
+            clear_agent_reasoning_cache()
+            st.success("Session Gemini key cleared.")
+            st.rerun()
+        if action_cols[2].button("Test Gemini", key="fetch_test_gemini"):
+            if not configured_gemini_api_key(settings):
+                st.warning("Gemini API key is not configured.")
+            else:
+                try:
+                    test_reasoning = asyncio.run(
+                        GeminiReasoningClient(
+                            api_key=configured_gemini_api_key(settings) or "",
+                            model=gemini_model(settings),
+                            timeout_seconds=20,
+                        )._generate_reasoning(
+                            "Return only JSON with this exact schema and content: "
+                            '{"summary":"Gemini connection OK","reasons":["API key and model responded."],"risks":[],"missing_data":[]}'
+                        )
+                    )
+                    st.success(test_reasoning.summary)
+                except GeminiReasoningError as exc:
+                    st.error(f"Gemini test failed: {exc}")
+
+
 def render_agent_reasoning_card(label: str, signal: AgentSignal | None) -> None:
     """Render one compact agent reasoning card."""
 
@@ -2742,7 +3015,7 @@ def render_agent_reasoning_card(label: str, signal: AgentSignal | None) -> None:
 
     st.markdown(f"**{label}**")
     cols = st.columns([1, 1, 1])
-    cols[0].metric("Decision", signal.action)
+    cols[0].metric("Decision", _display_signal_action(signal))
     cols[1].metric("Score", f"{signal.score:.2f}")
     cols[2].metric("Confidence", f"{signal.confidence * 100:.0f}%")
     st.write(signal.summary)
@@ -2765,12 +3038,13 @@ def render_signal(signal: AgentSignal | None) -> None:
     if signal is None:
         st.info("Agent signal is not available.")
         return
-    card_class = "decision-buy" if signal.action == "BUY" else "decision-sell"
+    action = _display_signal_action(signal)
+    card_class = "decision-buy" if action == "BUY" else "decision-sell"
     st.markdown(
         f"""
         <div class="{card_class}">
           <div class="agent-chip">{signal.agent_name}</div>
-          <h2 style="margin:0;">{signal.action}</h2>
+          <h2 style="margin:0;">{action}</h2>
           <p style="margin:.35rem 0 0;">{signal.summary}</p>
         </div>
         """,
@@ -2782,6 +3056,14 @@ def render_signal(signal: AgentSignal | None) -> None:
     with st.expander("Click to view agent reasons", expanded=False):
         for reason in signal.reasons:
             st.write(reason)
+
+
+def _display_signal_action(signal: AgentSignal) -> str:
+    """Return safer display action without changing deterministic signal object."""
+
+    if signal.action == "BUY" and signal.score <= 0 and signal.confidence <= 0.35:
+        return "INSUFFICIENT DATA"
+    return signal.action
 
 
 def render_consensus_decision(decision: Any) -> None:
@@ -2934,6 +3216,30 @@ def render_fetch_analysis(provider: YahooFinanceMarketProvider, settings: Settin
             help="Optional. Example: RELIANCE.NS or ^NSEI. Leave blank for the NSE stock selected above.",
             key="fetch_custom_symbol",
         )
+    with st.expander("Chart overlays", expanded=False):
+        overlay_cols = st.columns(3)
+        overlay_cols[0].checkbox(
+            "Full moon markers",
+            value=bool(st.session_state.get("chart_show_full_moon", False)),
+            key="chart_show_full_moon",
+            help="Show full/new moon cycle markers on the chart. Hidden by default.",
+        )
+        overlay_cols[1].checkbox(
+            "Planet alignment",
+            value=bool(st.session_state.get("chart_show_planet_alignment", False)),
+            key="chart_show_planet_alignment",
+            help="Show only multi-planet alignments with 4 or more planets involved. Hidden by default.",
+        )
+        overlay_cols[2].checkbox(
+            "Other astro windows",
+            value=bool(st.session_state.get("chart_show_astro_trend_windows", False)),
+            key="chart_show_astro_trend_windows",
+            help="Optional research-only trend-change windows. Hidden by default.",
+        )
+        st.caption(
+            "Astro overlays are research markers only. They are not BUY/SELL signals and remain hidden "
+            "unless selected here."
+        )
     symbol = symbol_from_label(selected_label)
     if custom_symbol.strip():
         symbol = custom_symbol.strip().upper().replace(".NS", "")
@@ -3028,7 +3334,7 @@ async def fetch_analysis_data(
         _fetch_progress(progress, f"Fetching Screener fundamentals for `{symbol}`...")
         screener_fundamentals = fetch_screener_fundamentals(symbol)
         _fetch_progress(progress, f"Fetching latest Screener concall transcript for `{symbol}`...")
-        concall_summary = fetch_concall_summary(symbol)
+        concall_summary = await fetch_concall_summary_with_timeout(symbol)
         nifty_bars: list[HistoricalBar] = []
         try:
             _fetch_progress(progress, "Fetching Nifty 50 benchmark chart `^NSEI`...")
@@ -3199,7 +3505,6 @@ def render_single_stock_dashboard() -> None:
         concall_tab,
         technical_tab,
         consensus_tab,
-        data_quality_tab,
     ) = st.tabs(
         [
             "Dashboard",
@@ -3207,7 +3512,6 @@ def render_single_stock_dashboard() -> None:
             "Concall Summary",
             "Technical Analysis",
             "Agent Consensus",
-            "Data Quality",
         ]
     )
 
@@ -3249,16 +3553,21 @@ def render_single_stock_dashboard() -> None:
             settings=settings,
         )
         render_investment_analysis_framework()
+        with st.expander("Data and sources", expanded=False):
+            render_data_quality(quote, bars, profile, settings)
+            render_screener_data_quality(screener_fundamentals)
     decision = st.session_state["decision"]
     signals = {signal.category: signal for signal in decision.signals}
 
     with fundamentals_tab:
-        render_signal(signals.get("fundamentals"))
+        st.markdown("### Company Fundamentals")
         if profile.get("profile_error"):
             st.warning(profile["profile_error"])
         render_items(fundamental_items(profile))
         render_screener_fundamentals(screener_fundamentals)
-        st.markdown("### Valuation")
+        st.markdown("### Fundamental Agent Signal")
+        render_signal(signals.get("fundamentals"))
+        st.markdown("### Valuation Agent Signal")
         render_signal(signals.get("valuation"))
         render_items(valuation_items(profile))
 
@@ -3281,37 +3590,20 @@ def render_single_stock_dashboard() -> None:
             sector=str(sector),
         )
 
-    with data_quality_tab:
-        render_data_quality(quote, bars, profile, settings)
-        render_screener_data_quality(screener_fundamentals)
-
-
 def render_buying_agent(settings: Settings) -> None:
     """Render the two-stage buying-agent tab."""
 
     st.subheader("Stock Buying Agent")
-    guided_mode = st.selectbox(
-        "Guided mode",
-        options=["Breakout", "Conservative", "Institutional Accumulation", "Custom"],
-        help=(
-            "Use this as an interpretation guide. The underlying strategy tabs and calculations "
-            "remain unchanged."
-        ),
-        key="buying_agent_guided_mode",
-    )
-    st.caption(
-        f"{guided_mode} mode: review the matching strategy output first, then confirm data freshness, "
-        "risk, liquidity and the next action before using any stock for further research."
-    )
-    darvax_tab, vcp_tab, shareholding_tab, dual_darvas_tab, buying_agent_tab = st.tabs(
+    vcp_tab, darvax_tab, buying_agent_tab = st.tabs(
         [
-            "DarvaX Pattern Search",
             "VCP Pattern Check",
-            "Shareholding Pattern",
-            "Dual-Listed Darvas Buy",
-            "Nifty 50 Buying Agent",
+            "DarvaX Pattern Search",
+            "Fundamental + Technical Analysis",
         ]
     )
+
+    with vcp_tab:
+        render_vcp_pattern_check()
 
     with darvax_tab:
         universe_name = st.selectbox(
@@ -3327,15 +3619,6 @@ def render_buying_agent(settings: Settings) -> None:
         )
         universe, _ = _selected_buying_universe(universe_name)
         render_darvax_pattern_scanner(universe_name=universe_name, universe=universe)
-
-    with vcp_tab:
-        render_vcp_pattern_check()
-
-    with shareholding_tab:
-        render_shareholding_pattern_check()
-
-    with dual_darvas_tab:
-        render_dual_listed_darvas_buy()
 
     with buying_agent_tab:
         buying_universe_name = st.selectbox(
@@ -3746,7 +4029,7 @@ def _sell_validation_status() -> str:
 def render_stock_probability_tab() -> None:
     """Render the stock outperformance probability dashboard tab."""
 
-    st.subheader("Stock Probability %")
+    st.subheader("Stock Probability")
     st.caption(
         "Ranks stocks by modeled probability of outperforming Nifty 50 over the next "
         "20 trading days. Cached mode is fast and does not contact Yahoo."
@@ -3838,9 +4121,7 @@ def render_stock_probability_tab() -> None:
 def render_vcp_pattern_check() -> None:
     """Render VCP rules and scanner subtabs."""
 
-    rules_tab, scanner_tab, ranking_tab = st.tabs(["Rules", "Scanner", "Output Ranking"])
-    with rules_tab:
-        render_vcp_rules()
+    scanner_tab, ranking_tab, rules_tab = st.tabs(["Scanner", "Output Ranking", "Rules"])
     with scanner_tab:
         universe_name = st.selectbox(
             "Stock buying filter",
@@ -3857,6 +4138,8 @@ def render_vcp_pattern_check() -> None:
         render_vcp_pattern_scanner(universe_name=universe_name, universe=universe)
     with ranking_tab:
         render_vcp_output_ranking_tab()
+    with rules_tab:
+        render_vcp_rules()
 
 
 def render_shareholding_pattern_check() -> None:
@@ -6339,19 +6622,27 @@ def render_sector_rotation_tab() -> None:
         st.session_state.pop("sector_rotation_result", None)
         st.session_state["sector_rotation_schema_version"] = schema_version
 
-    controls = st.columns([1.2, 1, 1, 1.1])
+    available_dates = _sector_rotation_available_history_dates(history_path)
+    latest_available_date = available_dates[-1] if available_dates else None
+    previous_available_date = available_dates[-2] if len(available_dates) >= 2 else latest_available_date
+    controls = st.columns([1.1, 1.1, 1, 1.1])
     with controls[0]:
-        as_of_date_input = st.text_input(
-            "As-of date",
-            value="",
-            placeholder="Optional, e.g. 2026-08-11",
-            help="Leave blank to use the latest date available in the adjusted local cache.",
-            key="sector_rotation_as_of_date",
+        date_mode = st.radio(
+            "Date mode",
+            options=["Latest", "Previous trading day", "Date picker"],
+            horizontal=True,
+            key="sector_rotation_date_mode",
         )
     with controls[1]:
-        run_clicked = st.button("Run Sector Rotation", type="primary")
+        picked_date = st.date_input(
+            "Selected date",
+            value=latest_available_date or date.today(),
+            max_value=date.today(),
+            disabled=date_mode != "Date picker",
+            key="sector_rotation_date_picker",
+        )
     with controls[2]:
-        use_cached_clicked = st.button("Load Saved Output")
+        run_clicked = st.button("Run Sector Rotation", type="primary")
     with controls[3]:
         refresh_cache = st.checkbox(
             "Refresh Yahoo data",
@@ -6362,11 +6653,28 @@ def render_sector_rotation_tab() -> None:
             ),
         )
 
-    try:
-        as_of_date = _normalize_sector_rotation_as_of_date(as_of_date_input)
-    except ValueError as exc:
-        st.error(str(exc))
-        return
+    fallback_message = ""
+    if date_mode == "Latest":
+        as_of_date = None
+    elif date_mode == "Previous trading day":
+        as_of_date = previous_available_date.isoformat() if previous_available_date else None
+    else:
+        if picked_date > date.today():
+            st.error("Future dates are not allowed. Choose today or an earlier trading date.")
+            return
+        chosen_date = picked_date
+        if available_dates:
+            valid_choices = [item for item in available_dates if item <= picked_date]
+            if not valid_choices:
+                st.error("No sector-rotation cache is available on or before the selected date.")
+                return
+            chosen_date = valid_choices[-1]
+            if chosen_date != picked_date:
+                fallback_message = (
+                    f"Selected date has no complete cached sector data. Falling back to "
+                    f"{chosen_date.strftime('%d %b %Y')}."
+                )
+        as_of_date = chosen_date.isoformat()
 
     requested_result_key = as_of_date or "latest"
     cached_result_key = st.session_state.get("sector_rotation_result_key")
@@ -6375,7 +6683,17 @@ def render_sector_rotation_tab() -> None:
     if date_changed:
         st.info("As-of date changed. Rebuilding Sector Rotation for the selected date...")
 
-    should_run = run_clicked or date_changed
+    if (
+        "sector_rotation_result" not in st.session_state
+        and as_of_date is None
+        and not run_clicked
+    ):
+        cached = _load_cached_sector_rotation(latest_path, summary_path, history_path)
+        if cached is not None:
+            st.session_state["sector_rotation_result"] = cached
+            st.session_state["sector_rotation_result_key"] = "latest"
+
+    should_run = run_clicked or date_changed or "sector_rotation_result" not in st.session_state
     if should_run:
         with st.spinner("Running Sector Rotation Agent from local adjusted cache..."):
             try:
@@ -6391,38 +6709,6 @@ def render_sector_rotation_tab() -> None:
             except Exception as exc:  # pragma: no cover - Streamlit debug path
                 st.exception(exc)
 
-    if use_cached_clicked:
-        if as_of_date is not None:
-            st.info(
-                "Saved output is only for the latest run. Running the selected historical date instead."
-            )
-            with st.spinner("Running Sector Rotation Agent for selected as-of date..."):
-                try:
-                    cached = _run_sector_rotation_for_streamlit(as_of_date, persist=False)
-                except Exception as exc:  # pragma: no cover - Streamlit debug path
-                    st.exception(exc)
-                    cached = None
-        else:
-            cached = _load_cached_sector_rotation(latest_path, summary_path, history_path)
-        if cached is not None:
-            st.session_state["sector_rotation_result"] = cached
-            st.session_state["sector_rotation_result_key"] = requested_result_key
-
-    if "sector_rotation_result" not in st.session_state:
-        if as_of_date is not None:
-            with st.spinner("Running Sector Rotation Agent for selected as-of date..."):
-                try:
-                    result = _run_sector_rotation_for_streamlit(as_of_date, persist=False)
-                    st.session_state["sector_rotation_result"] = result
-                    st.session_state["sector_rotation_result_key"] = requested_result_key
-                except Exception as exc:  # pragma: no cover - Streamlit debug path
-                    st.exception(exc)
-        else:
-            cached = _load_cached_sector_rotation(latest_path, summary_path, history_path)
-            if cached is not None:
-                st.session_state["sector_rotation_result"] = cached
-                st.session_state["sector_rotation_result_key"] = requested_result_key
-
     result = st.session_state.get("sector_rotation_result")
     if not result:
         st.info("Run the Sector Rotation Agent or load saved output.")
@@ -6430,7 +6716,6 @@ def render_sector_rotation_tab() -> None:
 
     table = pd.DataFrame(result.get("table", []))
     summary = str(result.get("summary") or "")
-    market_regime = str(result.get("market_regime") or "UNKNOWN")
     as_of = str(result.get("as_of_date") or "latest cached date")
     requested_as_of = result.get("requested_as_of_date")
 
@@ -6468,7 +6753,6 @@ def render_sector_rotation_tab() -> None:
         result = refreshed
         table = pd.DataFrame(result.get("table", []))
         summary = str(result.get("summary") or "")
-        market_regime = str(result.get("market_regime") or "UNKNOWN")
         as_of = str(result.get("as_of_date") or "latest cached date")
         missing_columns = sorted(required_columns - set(table.columns))
     if missing_columns:
@@ -6487,26 +6771,20 @@ def render_sector_rotation_tab() -> None:
             )
         return
 
-    metric_cols = st.columns(4)
+    metric_cols = st.columns(3)
     priority_count = int((table.get("Action", pd.Series(dtype=str)) == "⭐ HUNT").sum())
     weakening_count = int((table.get("State", pd.Series(dtype=str)) == "WEAKENING").sum())
-    metric_cols[0].metric("As of", as_of)
-    metric_cols[1].metric("Market regime", _market_regime_display(market_regime))
-    metric_cols[2].metric("Priority sectors", priority_count)
-    metric_cols[3].metric("Weakening", weakening_count)
-    st.markdown(f"### MARKET REGIME: {_market_regime_display(market_regime)}")
+    metric_cols[0].metric("Latest available data", _display_date(as_of))
+    metric_cols[1].metric("Priority sectors", priority_count)
+    metric_cols[2].metric("Weakening", weakening_count)
+    if fallback_message:
+        st.info(fallback_message)
 
     if requested_as_of and str(requested_as_of) != as_of:
         st.warning(
             f"Requested as-of date was {requested_as_of}, but the latest fully usable "
             f"local sector/benchmark cache date is {as_of}. Refresh Yahoo data and rerun "
             "if you need a newer trading date."
-        )
-
-    if market_regime == "RISK_OFF":
-        st.warning(
-            "Market regime is RISK_OFF. Rotation can still be detected, but long-trade "
-            "priority should be reduced."
         )
 
     if not table.empty:
@@ -6631,7 +6909,7 @@ def render_sector_rotation_tab() -> None:
             )
 
     with st.expander("NATIP Summary", expanded=True):
-        st.text(summary)
+        st.text(_sector_summary_without_market_regime(summary))
 
     with st.expander("Debug / Files", expanded=False):
         st.write(
@@ -7113,6 +7391,38 @@ def _normalize_sector_rotation_as_of_date(value: str) -> str | None:
         raise ValueError("Use As-of date in YYYY-MM-DD format, for example 2026-08-07.") from exc
 
 
+def _sector_rotation_available_history_dates(history_path: Path) -> list[date]:
+    """Return sorted sector-rotation dates available in saved history."""
+
+    try:
+        history = pd.read_csv(history_path, usecols=["Date"])
+    except (FileNotFoundError, ValueError):
+        return []
+    dates = pd.to_datetime(history["Date"], errors="coerce").dropna().dt.date
+    return sorted(set(dates.tolist()))
+
+
+def _display_date(value: Any) -> str:
+    """Return DD Mon YYYY display for a date-like value."""
+
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return str(value or "Unavailable")
+    return parsed.strftime("%d %b %Y")
+
+
+def _sector_summary_without_market_regime(summary: str) -> str:
+    """Remove market-regime text from visible Sector Rotation summary."""
+
+    lines = []
+    for line in str(summary or "").splitlines():
+        upper = line.upper()
+        if "MARKET REGIME" in upper or "RISK_OFF" in upper or "RISK-ON" in upper:
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip() or "No sector summary is available."
+
+
 def _run_sector_rotation_for_streamlit(
     as_of_date: str | None,
     *,
@@ -7448,17 +7758,181 @@ def render_research_lab_tab(settings: Settings) -> None:
     """Render experimental modules away from validated decision tools."""
 
     st.subheader("Research Lab")
+    st.info(
+        "Research-only workspace. These experiments cannot create BUY/SELL decisions, change model "
+        "scores, override risk or place trades."
+    )
+    card_cols = st.columns(3)
+    cards = [
+        ("Astro Snapshot", "Create one symbol/timestamp research snapshot.", "🌙"),
+        ("Market Research Notes", "Generate date-range experimental notes.", "📝"),
+        ("Chart Reaction Study", "Study past reactions and future watch candidates.", "📉"),
+    ]
+    for column, (title, description, icon) in zip(card_cols, cards, strict=True):
+        with column.container(border=True):
+            st.markdown(f"### {icon} {title}")
+            st.caption(description)
+    workflow = st.radio(
+        "Research workflow",
+        [card[0] for card in cards],
+        horizontal=True,
+        key="research_lab_workflow",
+        label_visibility="collapsed",
+    )
+    if workflow == "Astro Snapshot":
+        render_research_lab_astro_snapshot(settings)
+    elif workflow == "Market Research Notes":
+        render_research_lab_market_notes(settings)
+    else:
+        render_research_lab_chart_reaction_study(settings)
+
+    if _admin_debug_enabled():
+        with st.expander("Developer debug", expanded=False):
+            st.write(
+                {
+                    "astro_enabled": settings.astro_enabled,
+                    "astro_shadow_only": settings.astro_shadow_only,
+                    "timezone": "Asia/Kolkata",
+                }
+            )
+
+
+def _admin_debug_enabled() -> bool:
+    """Return whether admin-only debug panels should render."""
+
+    value = os.getenv("NATIP_ADMIN_DEBUG", "").strip().casefold()
+    return value in {"1", "true", "yes", "on"}
+
+
+def render_research_lab_astro_snapshot(settings: Settings) -> None:
+    """Render clean one-symbol Astro snapshot workflow."""
+
+    st.markdown("### Astro Snapshot")
+    controls = st.columns([1.2, 1, 1, 1])
+    symbol = controls[0].text_input("Symbol", value="NIFTY", key="research_astro_symbol")
+    as_of_date = controls[1].date_input("Date", value=date.today(), key="research_astro_date")
+    as_of_time = controls[2].time_input(
+        "Time",
+        value=datetime.now().time().replace(second=0, microsecond=0),
+        key="research_astro_time",
+    )
+    run_enabled = controls[3].checkbox(
+        "Enable run",
+        value=bool(settings.astro_enabled or settings.astro_ephemeris_path.exists()),
+        key="research_astro_run_enabled",
+    )
+    if st.button("Generate Snapshot", type="primary", key="research_generate_snapshot"):
+        as_of = datetime.combine(as_of_date, as_of_time).replace(tzinfo=UTC)
+        agent = AstroResearchAgent(
+            enabled=bool(run_enabled),
+            shadow_only=True,
+            max_score_adjustment=0.0,
+            ephemeris_path=settings.astro_ephemeris_path,
+            feature_store=JsonlFeatureStore(PROJECT_ROOT / "data" / "feature_store" / "astro.jsonl"),
+        )
+        try:
+            with st.spinner("Generating research snapshot..."):
+                result = asyncio.run(
+                    agent.execute(
+                        AgentContext(
+                            request_id=f"research-lab-astro-{symbol or 'NONE'}-{as_of.isoformat()}",
+                            payload={"symbol": symbol.strip() or None, "as_of": as_of},
+                        )
+                    )
+                )
+            st.session_state["research_lab_astro_snapshot"] = result.output
+        except Exception as exc:
+            st.error("Astro snapshot failed.")
+            if _admin_debug_enabled():
+                st.exception(exc)
+            else:
+                st.caption(str(exc))
+    result = st.session_state.get("research_lab_astro_snapshot")
+    if not result:
+        _render_empty_state("No snapshot generated yet", "Choose symbol/date/time and click Generate Snapshot.")
+        return
+    evidence = result.get("evidence") or {}
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Research status", "Available" if result.get("available") else "Unavailable")
+    metric_cols[1].metric("Astro regime", str(result.get("astro_regime") or "N/A"))
+    metric_cols[2].metric("Lunar phase", _format_optional_number(evidence.get("lunar_phase_angle")))
+    metric_cols[3].metric("Data timestamp", _relative_time_display(datetime.now(UTC)))
+    if result.get("warning"):
+        st.warning(str(result["warning"]))
+    if evidence:
+        st.info(_astro_plain_english_interpretation(result, evidence))
+        st.dataframe(_astro_influence_table(result, evidence), use_container_width=True, hide_index=True)
+    else:
+        st.info("No experimental astro evidence was available for this timestamp.")
+
+
+def render_research_lab_market_notes(settings: Settings) -> None:
+    """Render clean Astro-market notes workflow."""
+
+    st.markdown("### Market Research Notes")
+    note_cols = st.columns([1, 1, 1, 1])
+    note_start_date = note_cols[0].date_input("Start date", value=date.today(), key="lab_note_start")
+    note_end_date = note_cols[1].date_input(
+        "End date", value=date.today() + timedelta(days=7), key="lab_note_end"
+    )
+    note_market = note_cols[2].selectbox(
+        "Market", ["NIFTY 50", "BANK NIFTY", "Indian equities"], key="lab_note_market"
+    )
+    note_interval = note_cols[3].selectbox(
+        "Forecast interval", ["daily", "hourly", "both"], key="lab_note_interval"
+    )
+    time_cols = st.columns([1, 1, 2])
+    note_start_time = time_cols[0].time_input(
+        "Market open", value=datetime.strptime("09:15", "%H:%M").time(), key="lab_note_open"
+    )
+    note_end_time = time_cols[1].time_input(
+        "Market close", value=datetime.strptime("15:30", "%H:%M").time(), key="lab_note_close"
+    )
+    time_cols[2].caption("Times use Asia/Kolkata. This is experimental market research only.")
+    if st.button("Generate Research Notes", type="primary", key="lab_generate_notes"):
+        start_dt = datetime.combine(note_start_date, note_start_time).replace(tzinfo=IST)
+        end_dt = datetime.combine(note_end_date, note_end_time).replace(tzinfo=IST)
+        try:
+            with st.spinner("Generating research notes..."):
+                report = build_astro_market_report(
+                    provider=SkyfieldPositionProvider(settings.astro_ephemeris_path),
+                    start=start_dt,
+                    end=end_dt,
+                    market=str(note_market),
+                    forecast_interval=str(note_interval),
+                )
+            st.session_state["research_lab_market_report"] = report
+        except Exception as exc:
+            st.error("Research notes failed.")
+            if _admin_debug_enabled():
+                st.exception(exc)
+            else:
+                st.caption(str(exc))
+    report = st.session_state.get("research_lab_market_report")
+    if not report:
+        _render_empty_state("No market notes generated yet", "Select a range and click Generate Research Notes.")
+        return
+    st.markdown("#### Executive summary")
+    for note in report.market_notes[:5]:
+        st.write(note)
+    output_tabs = st.tabs(["Timeline", "Important Events", "Limitations"])
+    with output_tabs[0]:
+        st.dataframe(pd.DataFrame(report.important_windows), use_container_width=True, hide_index=True)
+    with output_tabs[1]:
+        st.dataframe(pd.DataFrame(report.event_table), use_container_width=True, hide_index=True)
+    with output_tabs[2]:
+        for limitation in report.limitations:
+            st.warning(limitation)
+
+
+def render_research_lab_chart_reaction_study(settings: Settings) -> None:
+    """Render clean chart reaction study workflow."""
+
+    st.markdown("### Chart Reaction Study")
     st.caption(
-        "Experimental research modules live here. They are useful for exploration, but they do not "
-        "create BUY/SELL decisions, change model scores, override risk or place trades."
+        "Past rows are observations after completed windows. Future rows are watch candidates, not predictions."
     )
-    st.warning(
-        "Everything in Research Lab is research-only. Validated stock decisions remain in Analyse a "
-        "Stock, Opportunities, Buying Agent, Stock Probability and Sector Rotation."
-    )
-    lab_tabs = st.tabs(["Experimental Astro Research"])
-    with lab_tabs[0]:
-        render_astro_research_tab(settings)
+    render_astro_chart_reaction_screener(settings)
 
 
 def render_astro_chart_reaction_screener(settings: Settings) -> None:
@@ -7562,7 +8036,7 @@ def render_past_astro_chart_reaction_scanner(settings: Settings) -> None:
         st.warning(universe.warning)
     st.caption(f"Universe source: `{universe.source}` | Available symbols: {len(universe.symbols)}")
 
-    if st.button("Scan Chart Reactions", type="primary"):
+    if st.button("Run Reaction Study", type="primary"):
         end = datetime.now(UTC)
         start = end - timedelta(days=lookback_days)
         try:
@@ -9375,13 +9849,33 @@ def _ratio_display(value: float | None) -> str:
     return "Data unavailable" if value is None else f"{float(value) * 100:.1f}%"
 
 
+def _relative_time_display(timestamp: datetime | None) -> str:
+    """Return a compact relative timestamp for UI display."""
+
+    if timestamp is None:
+        return "Updated time unavailable"
+    current = datetime.now(timestamp.tzinfo or UTC)
+    delta = current - timestamp
+    seconds = max(0, int(delta.total_seconds()))
+    if seconds < 60:
+        return "Updated just now"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"Updated {minutes} minute{'s' if minutes != 1 else ''} ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"Updated {hours} hour{'s' if hours != 1 else ''} ago"
+    days = hours // 24
+    return f"Updated {days} day{'s' if days != 1 else ''} ago"
+
+
 APP_NAVIGATION = [
     "Opportunities",
     "Analyse a Stock",
     "Buying Agent",
     "Quarterly Results",
     "Options Buying",
-    "Stock Probability %",
+    "Stock Probability",
     "Sector Rotation",
     "Raw Material Impact",
     "Research Lab",
@@ -9390,7 +9884,76 @@ APP_NAVIGATION = [
 NAVIGATION_ALIASES = {
     "Fetch Analysis": "Analyse a Stock",
     "Astro Research": "Research Lab",
+    "Stock Probability %": "Stock Probability",
 }
+
+NAVIGATION_ICONS = {
+    "Opportunities": "🔎",
+    "Analyse a Stock": "📈",
+    "Buying Agent": "🎯",
+    "Quarterly Results": "📄",
+    "Options Buying": "⚡",
+    "Stock Probability": "📊",
+    "Sector Rotation": "🧭",
+    "Raw Material Impact": "🏭",
+    "Research Lab": "🧪",
+}
+
+
+def _navigation_slug(label: str) -> str:
+    """Return URL-safe page slug for top navigation."""
+
+    return (
+        label.casefold()
+        .replace("&", "and")
+        .replace("%", "")
+        .replace("/", "-")
+        .replace(" ", "-")
+    )
+
+
+def _navigation_label_from_slug(slug: str | None) -> str | None:
+    """Return navigation label matching a URL slug."""
+
+    if not slug:
+        return None
+    cleaned = str(slug).strip()
+    for label in APP_NAVIGATION:
+        if _navigation_slug(label) == cleaned:
+            return label
+    return NAVIGATION_ALIASES.get(cleaned)
+
+
+def _query_page_value() -> str | None:
+    """Read selected NATIP page from Streamlit query params."""
+
+    try:
+        raw = st.query_params.get("page")
+    except Exception:
+        return None
+    if isinstance(raw, list):
+        return str(raw[0]) if raw else None
+    return str(raw) if raw else None
+
+
+def _render_top_navigation(active_tab: str) -> None:
+    """Render persistent top navigation tabs as accessible links."""
+
+    tabs_html = []
+    for label in APP_NAVIGATION:
+        icon = NAVIGATION_ICONS.get(label, "•")
+        active_class = " active" if label == active_tab else ""
+        aria_current = ' aria-current="page"' if label == active_tab else ""
+        slug = _navigation_slug(label)
+        tabs_html.append(
+            f'<a class="natip-nav-tab{active_class}" href="?page={slug}" '
+            f'{aria_current} title="{label}">'
+            f'<span class="natip-nav-icon">{icon}</span><span>{label}</span></a>'
+        )
+    st.markdown(
+        f'<nav class="natip-top-nav" aria-label="Primary NATIP navigation">{"".join(tabs_html)}</nav>',
+        unsafe_allow_html=True,
+    )
 
 
 def render_app_header() -> str:
@@ -9436,6 +9999,9 @@ def render_app_header() -> str:
             open_symbol_in_fetch_analysis(symbol)
     requested_raw = st.session_state.pop("requested_main_tab", None)
     requested = NAVIGATION_ALIASES.get(str(requested_raw), requested_raw)
+    query_page = _navigation_label_from_slug(_query_page_value())
+    if query_page in APP_NAVIGATION:
+        requested = query_page
     if requested in APP_NAVIGATION:
         st.session_state["active_main_tab"] = requested
     current_tab = NAVIGATION_ALIASES.get(
@@ -9445,14 +10011,8 @@ def render_app_header() -> str:
     st.session_state["active_main_tab"] = current_tab
     if current_tab not in APP_NAVIGATION:
         st.session_state["active_main_tab"] = "Opportunities"
-    active = st.selectbox(
-        "Open NATIP page",
-        APP_NAVIGATION,
-        index=APP_NAVIGATION.index(str(st.session_state["active_main_tab"])),
-        key="main_navigation_selectbox",
-        label_visibility="visible",
-    )
-    st.session_state["active_main_tab"] = active
+    active = str(st.session_state["active_main_tab"])
+    _render_top_navigation(active)
     st.divider()
     st.markdown("</div>", unsafe_allow_html=True)
     return active
@@ -9871,7 +10431,7 @@ def _render_home_opportunities() -> None:
             )
     action_cols = st.columns(2)
     if action_cols[0].button("Open Stock Probability"):
-        st.session_state["active_main_tab"] = "Stock Probability %"
+        st.session_state["active_main_tab"] = "Stock Probability"
         st.rerun()
     if action_cols[1].button("Open Buying Agent"):
         st.session_state["active_main_tab"] = "Buying Agent"
@@ -10719,7 +11279,7 @@ elif active_tab == "Decision History":
         "Decision History",
         "Timeline of previous decisions, rule changes and outcomes.",
     )
-elif active_tab == "Stock Probability %":
+elif active_tab in {"Stock Probability", "Stock Probability %"}:
     render_stock_probability_tab()
 elif active_tab == "System Health":
     render_system_health_page()
