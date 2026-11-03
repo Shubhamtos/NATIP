@@ -10882,7 +10882,6 @@ APP_NAVIGATION = [
     "Buying Agent",
     "Quarterly Results",
     "Options Buying",
-    "Stock Probability",
     "Sector Rotation",
     "Raw Material Impact",
     "Kronos Forecast",
@@ -10892,7 +10891,6 @@ APP_NAVIGATION = [
 NAVIGATION_ALIASES = {
     "Fetch Analysis": "Analyse a Stock",
     "Astro Research": "Research Lab",
-    "Stock Probability %": "Stock Probability",
 }
 
 NAVIGATION_ICONS = {
@@ -10902,7 +10900,6 @@ NAVIGATION_ICONS = {
     "Buying Agent": "🎯",
     "Quarterly Results": "📄",
     "Options Buying": "⚡",
-    "Stock Probability": "📊",
     "Sector Rotation": "🧭",
     "Raw Material Impact": "🏭",
     "Kronos Forecast": "⏱",
@@ -11472,7 +11469,7 @@ def _render_home_opportunities() -> None:
     if actionable_rows.empty:
         _render_empty_state(
             "No actionable opportunities in the quick view",
-            "Run Stock Probability or Buying Agent for full screening output.",
+            "Run Buying Agent for full screening output.",
         )
     else:
         for _, row in actionable_rows.head(5).iterrows():
@@ -11497,11 +11494,7 @@ def _render_home_opportunities() -> None:
                 """,
                 unsafe_allow_html=True,
             )
-    action_cols = st.columns(2)
-    if action_cols[0].button("Open Stock Probability"):
-        st.session_state["active_main_tab"] = "Stock Probability"
-        st.rerun()
-    if action_cols[1].button("Open Buying Agent"):
+    if st.button("Open Buying Agent"):
         st.session_state["active_main_tab"] = "Buying Agent"
         st.rerun()
 
@@ -14097,8 +14090,6 @@ elif active_tab == "Decision History":
         "Decision History",
         "Timeline of previous decisions, rule changes and outcomes.",
     )
-elif active_tab in {"Stock Probability", "Stock Probability %"}:
-    render_stock_probability_tab()
 elif active_tab == "System Health":
     render_system_health_page()
 elif active_tab == "Settings":
