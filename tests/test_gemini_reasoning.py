@@ -4,11 +4,15 @@ from app.dashboard.agent_runner import _canonical_agent_category
 from app.decision.ai_reasoning.gemini import (
     _agent_signal_prompt,
     _buying_recommendations_prompt,
+    _parse_reasoning_json,
+    _pattern_scan_prompt,
     _retry_delay_seconds,
     _should_try_fallback_model,
+    _single_stock_prompt,
     _unique_model_names,
+    normalize_gemini_model_name,
 )
-from app.models import AgentSignal, BuyingAgentScore, BuyingRecommendation
+from app.models import AgentSignal, BuyingAgentScore, BuyingRecommendation, TradingDecision
 
 
 def test_retry_delay_seconds_extracts_gemini_quota_delay() -> None:
@@ -35,6 +39,64 @@ def test_unique_model_names_preserves_order_and_removes_duplicates() -> None:
     assert _unique_model_names(
         ("gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-latest", "")
     ) == ("gemini-flash-latest", "gemini-2.5-flash")
+
+
+def test_legacy_gemini_models_migrate_to_current_fast_model() -> None:
+    assert normalize_gemini_model_name("gemini-2.5-flash") == "gemini-3.5-flash-lite"
+    assert normalize_gemini_model_name("gemini-3.5-flash") == "gemini-3.5-flash"
+
+
+def test_reasoning_parser_normalizes_provider_format_drift() -> None:
+    reasoning = _parse_reasoning_json("""```json
+        {
+          "summary": "Wait for confirmation.",
+          "confidence": "74%",
+          "reasons": ["r1", "r2", "r3", "r4", "r5", "r6", "r7"],
+          "risks": "Gap risk",
+          "missing_data": null
+        }
+        ```""")
+
+    assert reasoning.confidence == 74
+    assert len(reasoning.reasons) == 6
+    assert reasoning.risks == ["Gap risk"]
+    assert reasoning.missing_data == []
+
+
+def test_single_stock_prompt_includes_typed_decision_context_without_full_memos() -> None:
+    decision = TradingDecision(
+        action="HOLD",
+        score=0.0,
+        confidence=0.5,
+        summary="Wait for setup.",
+        signals=[
+            AgentSignal(
+                agent_name="technical",
+                category="technical",
+                action="HOLD",
+                score=0.0,
+                confidence=0.5,
+                summary="Near resistance.",
+            )
+        ],
+    )
+    prompt = _single_stock_prompt(
+        decision,
+        {
+            "symbol": "TEST",
+            "decision_context": {
+                "setup": {"entry_status": "WAIT_FOR_BREAKOUT"},
+                "risk": {"hard_vetoes": []},
+                "fundamentals": {"metrics": {"roe": 0.2}},
+            },
+        },
+        "",
+    )
+
+    assert '"entry_status": "WAIT_FOR_BREAKOUT"' in prompt
+    assert '"hard_vetoes": []' in prompt
+    assert '"roe": 0.2' in prompt
+    assert "primary_thesis" not in prompt
 
 
 def test_canonical_agent_category_accepts_gemini_label_variants() -> None:
@@ -69,6 +131,26 @@ def test_agent_signal_prompt_contains_swing_trade_guardrails() -> None:
     assert "Resistance touch is not breakout" in prompt
     assert '"entry_status": "READY|WAIT FOR BREAKOUT|WAIT FOR RETEST|LATE ENTRY"' in prompt
     assert "reward-risk below 2" in prompt
+
+
+def test_pattern_scan_prompt_constrains_institutional_explanation() -> None:
+    prompt = _pattern_scan_prompt(
+        "VCP",
+        {
+            "symbol": "TEST.NS",
+            "breakout_status": "Setup below pivot",
+            "fii_change_percent": None,
+            "dii_change_percent": None,
+        },
+        "Use only supplied evidence.",
+    )
+
+    assert "BUY CANDIDATE" in prompt
+    assert "one self-contained unified explanation" in prompt
+    assert "FII/DII values describe disclosed holding changes only" in prompt
+    assert "Never invent why institutions changed holdings" in prompt
+    assert "motivation is unknown" in prompt
+    assert '"breakout_status": "Setup below pivot"' in prompt
 
 
 def test_buying_recommendations_prompt_batches_symbols() -> None:

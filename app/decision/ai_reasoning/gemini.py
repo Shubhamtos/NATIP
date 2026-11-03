@@ -16,6 +16,15 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.models import AgentSignal, BuyingAgentScore, BuyingRecommendation, TradingDecision
 
+LEGACY_GEMINI_MODELS = {
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-flash-latest",
+    "gemini-flash-lite-latest",
+    "gemini-pro-latest",
+}
+CURRENT_GEMINI_MODEL = "gemini-3.5-flash-lite"
+
 
 class GeminiReasoning(BaseModel):
     """Structured reasoning returned by Gemini."""
@@ -36,6 +45,8 @@ class GeminiReasoning(BaseModel):
     entry_status: str | None = None
     invalidation_trigger: str | None = None
     next_action: str | None = None
+    strongest_counterargument: str | None = None
+    evidence_references: list[str] = Field(default_factory=list, max_length=40)
 
 
 class GeminiAgentReasoning(GeminiReasoning):
@@ -71,15 +82,10 @@ class GeminiReasoningClient:
     """Small async wrapper around Gemini's REST API."""
 
     api_key: str
-    model: str = "gemini-flash-latest"
+    model: str = CURRENT_GEMINI_MODEL
     timeout_seconds: float = 25.0
     max_retries: int = 2
-    fallback_models: tuple[str, ...] = (
-        "gemini-2.5-flash",
-        "gemini-flash-lite-latest",
-        "gemini-2.5-flash-lite",
-        "gemini-pro-latest",
-    )
+    fallback_models: tuple[str, ...] = (CURRENT_GEMINI_MODEL,)
 
     async def explain_agent_signal(
         self,
@@ -213,14 +219,40 @@ class GeminiReasoningClient:
             raise GeminiReasoningError("Gemini returned an invalid buying batch.") from exc
         return batch.recommendations
 
+    async def explain_pattern_scan(
+        self,
+        *,
+        strategy: str,
+        pattern_payload: dict[str, Any],
+        rules: str,
+    ) -> GeminiReasoning:
+        """Explain one deterministic VCP or DarvaX scanner result."""
+
+        prompt = _pattern_scan_prompt(strategy, pattern_payload, rules)
+        return await self._generate_reasoning(prompt)
+
     async def _generate_reasoning(self, prompt: str) -> GeminiReasoning:
         """Call Gemini in a worker thread and parse its response."""
 
         raw_text = await asyncio.to_thread(self._generate_text, prompt)
         try:
-            return GeminiReasoning.model_validate_json(_extract_json(raw_text))
-        except (ValueError, ValidationError) as exc:
+            return _parse_reasoning_json(raw_text)
+        except (json.JSONDecodeError, ValueError, ValidationError) as exc:
             raise GeminiReasoningError("Gemini returned an invalid reasoning payload.") from exc
+
+    def review_research_evidence(self, prompt: str) -> GeminiReasoning:
+        """Review a supplied research evidence contract using the shared JSON transport.
+
+        Args:
+            prompt: Evidence-constrained instructions and dated research inputs.
+
+        Returns:
+            Structured explanation, with no authority to alter application decisions.
+        """
+        try:
+            return _parse_reasoning_json(self._generate_text(prompt))
+        except (json.JSONDecodeError, ValueError, ValidationError) as exc:
+            raise GeminiReasoningError("Gemini returned an invalid research review.") from exc
 
     def _generate_text(self, prompt: str) -> str:
         """Call Gemini's generateContent endpoint."""
@@ -253,8 +285,25 @@ class GeminiReasoningClient:
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "responseMimeType": "application/json",
+                "responseSchema": GEMINI_REASONING_RESPONSE_SCHEMA,
+                "temperature": 0.2,
+                "maxOutputTokens": 1200,
             },
         }
+        from copy import deepcopy
+
+        from app.decision.ai_reasoning.research_frameworks import required_review_evidence
+
+        evidence_ids = required_review_evidence(prompt)
+        if evidence_ids:
+            schema = deepcopy(GEMINI_REASONING_RESPONSE_SCHEMA)
+            schema["required"] += ["strongest_counterargument", "evidence_references"]
+            schema["properties"]["evidence_references"] = {
+                "type": "ARRAY",
+                "minItems": 1,
+                "items": {"type": "STRING", "enum": evidence_ids},
+            }
+            payload["generationConfig"]["responseSchema"] = schema
 
         last_http_error: GeminiReasoningError | None = None
         for attempt in range(self.max_retries + 1):
@@ -277,9 +326,7 @@ class GeminiReasoningClient:
                 time.sleep(min(retry_delay, 15.0))
             except (URLError, TimeoutError) as exc:
                 if attempt >= self.max_retries:
-                    raise GeminiReasoningError(
-                        f"Gemini reasoning request failed: {exc}"
-                    ) from exc
+                    raise GeminiReasoningError(f"Gemini reasoning request failed: {exc}") from exc
                 time.sleep(1.5 * (attempt + 1))
             except json.JSONDecodeError as exc:
                 raise GeminiReasoningError(f"Gemini reasoning request failed: {exc}") from exc
@@ -291,6 +338,13 @@ class GeminiReasoningClient:
 
 class GeminiReasoningError(RuntimeError):
     """Raised when optional Gemini reasoning cannot be produced."""
+
+
+def normalize_gemini_model_name(model_name: str) -> str:
+    """Migrate retired legacy aliases to NATIP's current structured-output model."""
+
+    cleaned = model_name.strip()
+    return CURRENT_GEMINI_MODEL if cleaned in LEGACY_GEMINI_MODELS else cleaned
 
 
 SWING_TRADE_REASONING_INSTRUCTIONS = """
@@ -368,6 +422,29 @@ SWING_TRADE_JSON_SCHEMA = (
     "}"
 )
 
+GEMINI_REASONING_RESPONSE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "summary": {"type": "STRING"},
+        "decision": {"type": "STRING"},
+        "confidence": {"type": "INTEGER"},
+        "reasons": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "risks": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "entry_condition": {"type": "STRING"},
+        "entry_range": {"type": "STRING"},
+        "stop_loss": {"type": "STRING"},
+        "target": {"type": "STRING"},
+        "reward_to_risk": {"type": "STRING"},
+        "entry_status": {"type": "STRING"},
+        "invalidation_trigger": {"type": "STRING"},
+        "missing_data": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "next_action": {"type": "STRING"},
+        "strongest_counterargument": {"type": "STRING"},
+        "evidence_references": {"type": "ARRAY", "items": {"type": "STRING"}},
+    },
+    "required": ["summary", "reasons", "risks", "missing_data"],
+}
+
 
 def _single_stock_prompt(
     decision: TradingDecision,
@@ -377,12 +454,14 @@ def _single_stock_prompt(
     """Build a prompt for single-stock reasoning."""
 
     compact_payload = {
-        "decision": decision.model_dump(mode="json"),
+        "decision": _compact_decision(decision),
         "symbol": market_payload.get("symbol"),
         "sector": market_payload.get("sector"),
         "quote": market_payload.get("quote"),
         "profile": market_payload.get("profile"),
         "recent_candles": market_payload.get("recent_candles"),
+        "macro_context": market_payload.get("macro_context"),
+        "decision_context": _compact_decision_context(market_payload.get("decision_context")),
         "rules": rules,
     }
     return _json_prompt(
@@ -393,6 +472,59 @@ def _single_stock_prompt(
         ),
         payload=compact_payload,
     )
+
+
+def _compact_decision(decision: TradingDecision) -> dict[str, Any]:
+    """Return decision evidence without duplicating full memo payloads."""
+
+    return {
+        "action": decision.action,
+        "score": decision.score,
+        "confidence": decision.confidence,
+        "summary": decision.summary,
+        "reasons": decision.reasons[:8],
+        "decision_trace": (
+            decision.decision_trace.model_dump(mode="json")
+            if decision.decision_trace is not None
+            else None
+        ),
+        "agent_signals": [
+            {
+                "category": signal.category,
+                "action": signal.action,
+                "score": signal.score,
+                "confidence": signal.confidence,
+                "summary": signal.summary,
+                "reasons": signal.reasons[:4],
+            }
+            for signal in decision.signals
+        ],
+    }
+
+
+def _compact_decision_context(value: Any) -> dict[str, Any]:
+    """Keep only decision-relevant typed context in the provider prompt."""
+
+    if not isinstance(value, dict):
+        return {}
+    fundamentals = dict(value.get("fundamentals") or {})
+    return {
+        "as_of": value.get("as_of"),
+        "mandate": value.get("mandate"),
+        "setup": value.get("setup"),
+        "sector_rotation": value.get("sector_rotation"),
+        "fundamentals": {
+            "metrics": fundamentals.get("metrics", {}),
+            "reporting_period": fundamentals.get("reporting_period"),
+            "statement_basis": fundamentals.get("statement_basis"),
+            "freshness": fundamentals.get("freshness"),
+            "missing_data": fundamentals.get("missing_data", []),
+            "warnings": fundamentals.get("warnings", []),
+        },
+        "risk": value.get("risk"),
+        "position_sizing": value.get("position_sizing"),
+        "warnings": value.get("warnings", []),
+    }
 
 
 def _agent_signal_prompt(
@@ -519,7 +651,8 @@ def _buying_recommendations_prompt(
         '"summary": "unified reasoning, maximum 150 words", '
         '"decision": "BUY|WAIT|WATCH|REJECT", '
         '"confidence": 0, '
-        '"reasons": ["major positive driver 1", "major positive driver 2", "major positive driver 3"], '
+        '"reasons": ["major positive driver 1", "major positive driver 2", '
+        '"major positive driver 3"], '
         '"risks": ["major risk 1", "major risk 2", "major risk 3"], '
         '"entry_condition": "condition required before entry", '
         '"entry_range": "price range or unavailable", '
@@ -560,13 +693,62 @@ def _buying_agent_score_prompt(
     )
 
 
-def _json_prompt(*, task: str, payload: dict[str, Any]) -> str:
+def _pattern_scan_prompt(
+    strategy: str,
+    pattern_payload: dict[str, Any],
+    rules: str,
+) -> str:
+    """Build an evidence-constrained prompt for one pattern scanner result."""
+
+    from app.decision.ai_reasoning.research_frameworks import REVIEW_GUARDRAILS, pattern_context
+
+    return _json_prompt(
+        task=(
+            REVIEW_GUARDRAILS
+            + f" Explain this deterministic NATIP {strategy} scanner result for a 5-20 "
+            "trading-day research horizon. Use only supplied scanner evidence. Do not "
+            "alter scores, pattern labels, prices, timestamps, or ranking. Explain why "
+            "the stock appears to be doing well or badly, what price/volume/pattern evidence "
+            "supports that view, and the strongest counterargument. The summary must be one "
+            "self-contained unified explanation that includes the technical condition, FII/DII "
+            "evidence, risks, missing evidence, conditional action, and invalidation. Do not "
+            "require the reader to combine separate reasons or risks to understand the answer. "
+            "The decision is an AI research view only and must be one of BUY CANDIDATE, "
+            "WAIT, WATCH, AVOID, or SELL/EXIT REVIEW. BUY CANDIDATE is a shortlist label, "
+            "not a final trade recommendation. Do not issue BUY when breakout confirmation, "
+            "risk controls, liquidity, or reward-to-risk evidence is missing. Do not issue "
+            "SELL/EXIT REVIEW unless supplied evidence explicitly shows a failed breakout "
+            "or breakdown. FII/DII values describe disclosed holding changes only. Never "
+            "invent why institutions changed holdings or claim causation. State that their "
+            "motivation is unknown unless supplied evidence explicitly establishes it. If "
+            "FII/DII data is missing, say so explicitly. Never invent news, fundamentals, "
+            "valuation, order flow, delivery data, or institutional activity."
+        ),
+        payload={
+            "strategy": strategy,
+            "scanner_result": pattern_payload,
+            "research_context": pattern_context(strategy, pattern_payload),
+            "rules": rules,
+        },
+        research=True,
+    )
+
+
+def _json_prompt(*, task: str, payload: dict[str, Any], research: bool = False) -> str:
     """Return a strict JSON-response prompt."""
 
+    schema = SWING_TRADE_JSON_SCHEMA
+    if research:
+        fields = json.loads(schema)
+        fields.update(
+            strongest_counterargument="strongest evidence-based counterargument",
+            evidence_references=["scanner"],
+        )
+        schema = json.dumps(fields)
     return (
         f"{task}\n\n"
         "Return only JSON with this schema:\n"
-        f"{SWING_TRADE_JSON_SCHEMA}\n\n"
+        f"{schema}\n\n"
         "Keep reasons evidence-based and concise. If data is missing, say so clearly.\n\n"
         f"Input JSON:\n{json.dumps(payload, default=str)}"
     )
@@ -599,6 +781,35 @@ def _extract_json(text: str) -> str:
     if start == -1 or end == -1 or end < start:
         raise ValueError("No JSON object found.")
     return cleaned[start : end + 1]
+
+
+def _parse_reasoning_json(text: str) -> GeminiReasoning:
+    """Normalize harmless provider format drift and validate one reasoning payload."""
+
+    payload = json.loads(_extract_json(text))
+    if not isinstance(payload, dict):
+        raise ValueError("Reasoning payload must be a JSON object.")
+
+    summary = payload.get("summary")
+    if summary is not None:
+        payload["summary"] = str(summary).strip()
+    confidence = payload.get("confidence")
+    if isinstance(confidence, str):
+        match = re.search(r"-?\d+(?:\.\d+)?", confidence)
+        payload["confidence"] = round(float(match.group())) if match else None
+    if isinstance(payload.get("confidence"), (int, float)):
+        payload["confidence"] = max(0, min(100, round(float(payload["confidence"]))))
+
+    limits = {"reasons": 6, "risks": 6, "missing_data": 8, "evidence_references": 40}
+    for field, limit in limits.items():
+        values = payload.get(field)
+        if values is None:
+            payload[field] = []
+        elif isinstance(values, list):
+            payload[field] = [str(value).strip() for value in values if str(value).strip()][:limit]
+        else:
+            payload[field] = [str(values).strip()] if str(values).strip() else []
+    return GeminiReasoning.model_validate(payload)
 
 
 def _unique_model_names(model_names: tuple[str, ...]) -> tuple[str, ...]:

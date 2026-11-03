@@ -1,6 +1,8 @@
 """Curated NSE symbol catalog for the dashboard."""
 
+import csv
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +99,42 @@ def symbol_from_label(label: str) -> str:
     """
 
     return label.split(" - ", maxsplit=1)[0]
+
+
+def all_nse_labels(project_root: Path) -> list[str]:
+    """Build searchable equity labels from local reference and universe files.
+
+    Args:
+        project_root: Absolute NATIP project directory.
+
+    Returns:
+        Deduplicated stock labels, falling back to the curated catalogue.
+    """
+    names = {item.symbol: item.name for item in NSE_SYMBOLS}
+    sources = (
+        project_root / "config/reference/nse_securities.csv",
+        project_root / "stocks_universe_2026_08.csv",
+        project_root / "stocks_universe_v5_smallcap250_2026_08_11.csv",
+        project_root / "data/nifty_smallcap250_constituents.csv",
+    )
+    for path in sources:
+        try:
+            with path.open(newline="", encoding="utf-8-sig") as handle:
+                for row in csv.DictReader(handle):
+                    if row.get("active", "true").strip().lower() in {"false", "0"}:
+                        continue
+                    symbol = str(
+                        row.get("symbol") or row.get("Ticker") or row.get("Symbol") or ""
+                    ).strip().upper().removesuffix(".NS")
+                    if not symbol:
+                        continue
+                    name = str(
+                        row.get("Company") or row.get("Company Name") or ""
+                    ).strip()
+                    names[symbol] = name or names.get(symbol, "")
+        except (OSError, csv.Error):
+            continue
+    return [f"{symbol} - {name}" if name else symbol for symbol, name in sorted(names.items())]
 
 
 def sector_for_symbol(symbol: str) -> str:

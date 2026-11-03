@@ -28,6 +28,8 @@ class Settings(BaseSettings):
         yahoo_default_exchange_suffix: Default Yahoo Finance suffix for NSE symbols.
         gemini_api_key: Optional Gemini API key supplied externally.
         gemini_model: Gemini model used for optional reasoning enrichment.
+        openai_api_key: Optional OpenAI API key supplied externally.
+        openai_model: OpenAI model used for optional agentic reasoning enrichment.
         astro_enabled: Whether experimental astro shadow evidence is generated.
         astro_shadow_only: Astro must remain shadow-only in live decision reports.
         astro_max_score_adjustment: Maximum live score adjustment; must be zero.
@@ -35,11 +37,17 @@ class Settings(BaseSettings):
         raw_material_enabled: Whether raw-material impact research is enabled.
         raw_material_min_confidence: Minimum confidence for material alerts.
         raw_material_margin_alert_bps: Minimum estimated margin impact for material alerts.
+        analysis_total_capital: Optional capital used only for research position sizing.
+        analysis_risk_per_trade_pct: Maximum research loss at the structural stop.
+        analysis_max_position_pct: Maximum research position as a percentage of capital.
+        analysis_max_sector_exposure_pct: Maximum configured sector exposure.
+        analysis_max_new_buys_per_day: Maximum number of new research BUY ideas per day.
+        decision_log_path: Local SQLite path for auditable decision history.
     """
 
     model_config = SettingsConfigDict(
         env_prefix="NATIP_",
-        env_file=PROJECT_ROOT / ".env",
+        env_file=(PROJECT_ROOT / ".env", PROJECT_ROOT / ".env.local"),
         env_file_encoding="utf-8",
         extra="ignore",
         populate_by_name=True,
@@ -66,8 +74,16 @@ class Settings(BaseSettings):
         ),
     )
     gemini_model: str = Field(
-        default="gemini-2.5-flash",
+        default="gemini-3.5-flash-lite",
         validation_alias=AliasChoices("NATIP_GEMINI_MODEL", "GEMINI_MODEL"),
+    )
+    openai_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NATIP_OPENAI_API_KEY", "OPENAI_API_KEY"),
+    )
+    openai_model: str = Field(
+        default="gpt-4.1-mini",
+        validation_alias=AliasChoices("NATIP_OPENAI_MODEL", "OPENAI_MODEL"),
     )
     astro_enabled: bool = Field(
         default=False,
@@ -108,6 +124,14 @@ class Settings(BaseSettings):
             "RAW_MATERIAL_MARGIN_ALERT_BPS",
         ),
     )
+    analysis_total_capital: float | None = Field(default=None, gt=0)
+    analysis_risk_per_trade_pct: float = Field(default=1.0, gt=0.0, le=5.0)
+    analysis_max_position_pct: float = Field(default=5.0, gt=0.0, le=100.0)
+    analysis_max_sector_exposure_pct: float = Field(default=25.0, gt=0.0, le=100.0)
+    analysis_max_new_buys_per_day: int = Field(default=3, ge=0, le=25)
+    decision_log_path: Path = Field(
+        default=PROJECT_ROOT / "data" / "decisions" / "decisions.sqlite3"
+    )
 
     @field_validator("database_url")
     @classmethod
@@ -143,6 +167,13 @@ class Settings(BaseSettings):
         """
 
         return value.upper()
+
+    @field_validator("decision_log_path", mode="after")
+    @classmethod
+    def resolve_decision_log_path(cls, value: Path) -> Path:
+        """Resolve a relative decision-log path from the project root."""
+
+        return value if value.is_absolute() else PROJECT_ROOT / value
 
     @field_validator("environment", mode="before")
     @classmethod

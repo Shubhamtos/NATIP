@@ -37,6 +37,27 @@ FREE_DATA_SOURCES: tuple[FreeDataSource, ...] = (
         notes="Fetched with yfinance symbol BZ=F.",
     ),
     FreeDataSource(
+        category="market_risk",
+        name="Yahoo Finance India VIX",
+        status="connected",
+        url="https://finance.yahoo.com/quote/%5EINDIAVIX/",
+        notes="Free volatility proxy fetched with yfinance symbol ^INDIAVIX.",
+    ),
+    FreeDataSource(
+        category="market_index",
+        name="Yahoo Finance Nifty 50",
+        status="connected",
+        url="https://finance.yahoo.com/quote/%5ENSEI/",
+        notes="Broad-market proxy fetched with yfinance symbol ^NSEI.",
+    ),
+    FreeDataSource(
+        category="global_rates",
+        name="Yahoo Finance US 10Y yield",
+        status="connected",
+        url="https://finance.yahoo.com/quote/%5ETNX/",
+        notes="Global-rate proxy fetched with yfinance symbol ^TNX.",
+    ),
+    FreeDataSource(
         category="nse_announcements",
         name="NSE corporate announcements",
         status="planned_unstable_endpoint",

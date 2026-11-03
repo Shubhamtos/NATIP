@@ -8,10 +8,10 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 
 from app.agents import AgentContext
 from app.evidence import EvidenceRecord
-from app.providers.market import HistoricalDataRequest
-from app.runtime import AppRuntime, runtime
 from app.intelligence.raw_material.service import RawMaterialImpactService
 from app.models import CompanyRawMaterialMapping
+from app.providers.market import HistoricalDataRequest
+from app.runtime import AppRuntime, runtime
 
 app = FastAPI(title="NATIP", version="0.1.0")
 
@@ -36,7 +36,17 @@ def require_raw_material_admin(x_natip_role: str | None = Header(default=None)) 
     """Require a local admin role for mapping changes."""
 
     if x_natip_role != "admin":
-        raise HTTPException(status_code=403, detail="Raw-material mapping changes require admin role.")
+        raise HTTPException(
+            status_code=403, detail="Raw-material mapping changes require admin role."
+        )
+
+
+def get_admin_raw_material_service(
+    _: Annotated[None, Depends(require_raw_material_admin)],
+) -> RawMaterialImpactService:
+    """Authorize mapping changes before initializing writable storage."""
+
+    return get_raw_material_service()
 
 
 @app.get("/health")
@@ -203,8 +213,7 @@ async def raw_material_mappings(
 @app.post("/raw-material/mappings")
 async def upsert_raw_material_mapping(
     mapping: CompanyRawMaterialMapping,
-    service: Annotated[RawMaterialImpactService, Depends(get_raw_material_service)],
-    _: Annotated[None, Depends(require_raw_material_admin)],
+    service: Annotated[RawMaterialImpactService, Depends(get_admin_raw_material_service)],
 ) -> dict[str, object]:
     """Create or update a company-material mapping."""
 

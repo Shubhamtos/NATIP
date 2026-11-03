@@ -131,13 +131,19 @@ def analyze_quarterly_result(record: QuarterlyResultRecord) -> QuarterlyResultAn
         profit_growth_yoy=profit_yoy.display,
         profit_growth_qoq=profit_qoq.display,
         operating_margin=_pct(margin) if margin is not None else "Unavailable",
-        margin_change_bps=f"{margin_change_bps:+.0f} bps" if margin_change_bps is not None else "Unavailable",
+        margin_change_bps=(
+            f"{margin_change_bps:+.0f} bps" if margin_change_bps is not None else "Unavailable"
+        ),
         eps_growth=eps_yoy.display,
         quarter_summary=summary,
         improved=improved,
         weakened=weakened,
         result_drivers=_result_driver_notes(record),
-        earnings_quality="; ".join(quality_notes) if quality_notes else "No major one-off earnings-quality issue detected from available evidence.",
+        earnings_quality=(
+            "; ".join(quality_notes)
+            if quality_notes
+            else "No major one-off earnings-quality issue detected from available evidence."
+        ),
         valuation_notes=valuation_notes,
         risks=risks[:8],
         unanswered_questions=unanswered[:8],
@@ -159,10 +165,10 @@ def growth(current: float | None, base: float | None) -> GrowthResult:
     if base < 0 <= current:
         return GrowthResult("Turnaround to profit", None, "turnaround")
     if base < 0 and current < 0:
-        change = (current - base) / abs(base)
+        change = (abs(base) - abs(current)) / abs(base)
         if change > 0:
-            return GrowthResult(f"Loss increased {change * 100:+.1f}%", change)
-        return GrowthResult(f"Loss reduced {change * 100:+.1f}%", change)
+            return GrowthResult(f"Loss reduced {change * 100:+.1f}%", change)
+        return GrowthResult(f"Loss increased {abs(change) * 100:+.1f}%", change)
     value = current / base - 1
     return GrowthResult(f"{value * 100:+.1f}%", value)
 
@@ -191,7 +197,9 @@ def _current_metrics(record: QuarterlyResultRecord) -> dict[str, float | None]:
 
     return _metrics_from_history(record.quarterly_history, offset=0) or {
         "revenue": _first_metric(record.normalized_values, ("revenue", "sales")),
-        "operating_profit": _first_metric(record.normalized_values, ("operating_profit", "operating_earnings")),
+        "operating_profit": _first_metric(
+            record.normalized_values, ("operating_profit", "operating_earnings")
+        ),
         "net_profit": _first_metric(record.normalized_values, ("net_profit", "profit")),
         "eps": _first_metric(record.normalized_values, ("eps",)),
     }
@@ -310,10 +318,17 @@ def _valuation_assessment(record: QuarterlyResultRecord) -> tuple[str, str]:
     if pe is None:
         return "Insufficient data", "Stock P/E was not visible from Screener latest/company data."
     if pe <= 18:
-        return "Attractive", f"Visible Stock P/E is {pe:.1f}; peer/history validation still required."
+        return (
+            "Attractive",
+            f"Visible Stock P/E is {pe:.1f}; peer/history validation still required.",
+        )
     if pe <= 35:
         return "Reasonable", f"Visible Stock P/E is {pe:.1f}; growth quality must justify it."
-    return "Expensive", f"Visible Stock P/E is {pe:.1f}; valuation risk is elevated. Market cap: {market_cap or 'unavailable'}."
+    return (
+        "Expensive",
+        f"Visible Stock P/E is {pe:.1f}; valuation risk is elevated. "
+        f"Market cap: {market_cap or 'unavailable'}.",
+    )
 
 
 def _ratio_value(record: QuarterlyResultRecord, label: str) -> str | None:
@@ -334,7 +349,9 @@ def _evidence_confidence(record: QuarterlyResultRecord) -> str:
         points += 2
     if record.pdf_url and record.pdf_sha256:
         points += 2
-    if record.document_facts and not any(fact.value == "Needs OCR" for fact in record.document_facts):
+    if record.document_facts and not any(
+        fact.value == "Needs OCR" for fact in record.document_facts
+    ):
         points += 2
     if record.validation_warnings:
         points -= 2
@@ -369,7 +386,11 @@ def _quarter_summary(
 ) -> str:
     """Return one compact summary."""
 
-    margin_text = f"{margin_change_bps:+.0f} bps margin change" if margin_change_bps is not None else "margin change unavailable"
+    margin_text = (
+        f"{margin_change_bps:+.0f} bps margin change"
+        if margin_change_bps is not None
+        else "margin change unavailable"
+    )
     return (
         f"{record.company_name} reported {record.reporting_quarter or 'the latest quarter'} with "
         f"revenue YoY {revenue_yoy.display}, profit YoY {profit_yoy.display}, and {margin_text}."
@@ -381,7 +402,11 @@ def _result_driver_notes(record: QuarterlyResultRecord) -> list[str]:
 
     notes = []
     for fact in record.document_facts:
-        if fact.label in {"Segment performance", "Management commentary", "Other income / exceptional"}:
+        if fact.label in {
+            "Segment performance",
+            "Management commentary",
+            "Other income / exceptional",
+        }:
             notes.append(f"{fact.label}: {fact.excerpt}")
     return notes[:5]
 
@@ -397,7 +422,13 @@ def _shortlist_reason(
     if confidence == "Low":
         return "Not shortlisted because evidence confidence is low."
     if result_strength == "Strong" and valuation in {"Attractive", "Reasonable"} and not risks:
-        return "Shortlisted for research because growth, valuation and evidence quality pass initial checks."
+        return (
+            "Shortlisted for research because growth, valuation and evidence quality pass "
+            "initial checks."
+        )
     if result_strength == "Strong":
-        return "Promising results, but investment assessment is incomplete until risks/valuation are resolved."
+        return (
+            "Promising results, but investment assessment is incomplete until risks/valuation "
+            "are resolved."
+        )
     return "Not shortlisted because result strength is not clearly strong."

@@ -236,7 +236,8 @@ def test_dashboard_has_state_driven_top_level_sections() -> None:
     assert "Vol Dry %" in contents
     assert "DII Chg" in contents
     assert "Find VCP setups in {universe_name}" in contents
-    assert "Nifty 50 Buying Agent" in contents
+    assert "Fundamental + Technical Analysis" in contents
+    assert "Nifty 50 Buying Agent" not in contents
     assert "Manual Search Stage 2 Analysis" in contents
     assert "NOT RECOMMENDED" in contents
     assert "_render_clickable_darvax_results_table" in contents

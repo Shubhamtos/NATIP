@@ -37,6 +37,9 @@ For example, `RELIANCE` becomes `RELIANCE.NS`.
 streamlit run app/dashboard/streamlit_app.py
 ```
 
+The Fetch Analysis decision pipeline, risk gates, optional unified AI explanation and local
+audit log are documented in [docs/decision_framework.md](docs/decision_framework.md).
+
 ## Stock Probability %
 
 The `Stock Probability %` tab ranks stocks by modeled probability of
@@ -90,3 +93,31 @@ Splits are time-based:
 
 To scale the universe later, replace `stocks_universe_2026_08.csv` with 250-500
 NSE symbols in the same metadata format.
+
+## Backtesting research
+
+NATIP includes a separate bias-aware backtesting package for testing signals and
+portfolio strategies without changing the frozen production models.
+
+```bash
+venv/bin/python backtest.py signal --name momentum_6_1 \
+  --config configs/backtesting/nifty100_momentum.json
+
+venv/bin/python backtest.py strategy \
+  --config configs/backtesting/nifty100_momentum.json --robustness
+```
+
+See [docs/backtesting.md](docs/backtesting.md) for execution timing, costs,
+walk-forward validation, report artifacts, and data limitations.
+
+## Kronos Stock Direction
+
+The `Kronos Forecast` Streamlit tab runs the MIT-licensed Kronos-mini candlestick
+foundation model for one selected NSE stock. It uses adjusted daily Yahoo OHLCV,
+supports 5, 10 and 20-session paths, and keeps the pretrained model weights in the
+local `data/models/kronos` cache.
+
+The tab returns `UP`, `DOWN` or `SIDEWAYS` relative to a volatility-aware neutral
+band. These labels are experimental model outputs, not calibrated probabilities or
+BUY/SELL recommendations. See [docs/kronos_forecast.md](docs/kronos_forecast.md)
+for methodology and limitations.

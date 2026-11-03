@@ -1,0 +1,61 @@
+{
+  "run_name": "nifty100_momentum_6_1",
+  "data": {
+    "universe": "nifty100",
+    "start_date": "2015-01-01",
+    "end_date": null,
+    "benchmark": "^NSEI",
+    "cache_dir": "data/backtesting/cache",
+    "update_cache": true,
+    "min_history_days": 252,
+    "min_avg_traded_value_20d": 10000000,
+    "reporting_lag_days": 45
+  },
+  "costs": {
+    "mode": "delivery",
+    "brokerage_bps": 0.0,
+    "brokerage_cap_rupees": 20.0,
+    "stt_buy_bps": 10.0,
+    "stt_sell_bps": 10.0,
+    "exchange_transaction_bps": 0.297,
+    "sebi_bps": 0.01,
+    "gst_rate": 0.18,
+    "stamp_duty_buy_bps": 1.5,
+    "slippage_bps": 5.0,
+    "volume_impact_coefficient": 0.0,
+    "effective_date": "2026-01-01",
+    "verify_before_live_use": true
+  },
+  "strategy": {
+    "signal": "momentum_6_1",
+    "initial_capital_rupees": 1000000,
+    "rebalance_frequency": "monthly",
+    "top_n": 10,
+    "bottom_n": 10,
+    "long_short": false,
+    "weighting": "equal",
+    "max_position_weight": 0.15,
+    "max_sector_weight": 0.35,
+    "stop_loss_pct": 0.12,
+    "trailing_stop_pct": null,
+    "fill_model": "next_open",
+    "liquidity_lookback": 20,
+    "volatility_lookback": 20,
+    "circuit_limit_pct": 0.20
+  },
+  "validation": {
+    "forward_horizons": [5, 10, 20, 60],
+    "prediction_horizon_days": 20,
+    "quantiles": 5,
+    "train_years": 3,
+    "test_months": 12,
+    "embargo_days": 20,
+    "final_oos_start": null,
+    "random_portfolios": 1000,
+    "monte_carlo_samples": 2000,
+    "sensitivity_pct": 0.20,
+    "min_mean_ic": 0.02,
+    "min_positive_ic_pct": 0.55,
+    "random_seed": 42
+  }
+}

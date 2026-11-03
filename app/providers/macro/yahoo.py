@@ -73,10 +73,50 @@ class YahooMacroProvider:
             source_url="https://finance.yahoo.com/quote/BZ=F/",
         )
 
+    async def get_india_vix(self) -> MacroQuote:
+        """Return India VIX as a free market-risk proxy."""
+
+        return await self._get_quote(
+            symbol="^INDIAVIX",
+            label="India VIX",
+            source_url="https://finance.yahoo.com/quote/%5EINDIAVIX/",
+        )
+
+    async def get_nifty50(self) -> MacroQuote:
+        """Return Nifty 50 as a broad-market proxy."""
+
+        return await self._get_quote(
+            symbol="^NSEI",
+            label="Nifty 50",
+            source_url="https://finance.yahoo.com/quote/%5ENSEI/",
+        )
+
+    async def get_us_10y(self) -> MacroQuote:
+        """Return US 10-year yield as a global-rate proxy."""
+
+        return await self._get_quote(
+            symbol="^TNX",
+            label="US 10Y yield",
+            source_url="https://finance.yahoo.com/quote/%5ETNX/",
+        )
+
     async def get_context(self) -> list[MacroQuote]:
         """Return free macro context used by NATIP."""
 
         return list(await asyncio.gather(self.get_usd_inr(), self.get_brent_crude()))
+
+    async def get_extended_context(self) -> list[MacroQuote]:
+        """Return the complete free macro and market-risk proxy set used by Fetch Analysis."""
+
+        tasks = (
+            self.get_usd_inr(),
+            self.get_brent_crude(),
+            self.get_india_vix(),
+            self.get_nifty50(),
+            self.get_us_10y(),
+        )
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        return [result for result in results if isinstance(result, MacroQuote)]
 
     async def _get_quote(self, *, symbol: str, label: str, source_url: str) -> MacroQuote:
         """Fetch one Yahoo macro quote."""

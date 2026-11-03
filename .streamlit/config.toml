@@ -1,7 +1,13 @@
 [server]
 headless = true
+# The bundled Python runtime is inside this project. Never hot-reload its
+# enum/typing modules while third-party libraries retain references to them.
+fileWatcherType = "none"
+runOnSave = false
+folderWatchBlacklist = ["**/python-standalone", "**/venv", "**/.venv", "**/data", "**/models", "**/outputs", "**/reports", "**/logs"]
 enableCORS = false
-enableXsrfProtection = true
+enableXsrfProtection = false
+enableStaticServing = true
 
 [browser]
 gatherUsageStats = false

@@ -22,15 +22,22 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 from plotly.subplots import make_subplots
 
 from app.core.config import Settings, get_settings
 from app.agents import AgentContext, AstroResearchAgent
+from app.database import DecisionLogStore, MarketResearchStore
 from app.database.feature_store import JsonlFeatureStore
 from app.dashboard.agent_runner import run_buying_agent, run_stock_agents
+from app.dashboard.market_strength_web import (
+    build_market_strength_workspace_html,
+    export_market_strength_workspace,
+)
 from app.dashboard.analysis import (
     data_quality_summary,
     fundamental_items,
@@ -57,6 +64,10 @@ from app.dashboard.nifty250_universe import (
     universe_labels,
 )
 from app.dashboard.nse_symbols import labels, sector_for_symbol, symbol_from_label
+from app.dashboard.kronos_universe import (
+    UNIVERSE_OPTIONS, US_UNIVERSE_OPTIONS, load_kronos_universe, load_us_universe,
+)
+from app.dashboard.kronos_research import render_kronos_research_panel
 from app.dashboard.pattern_scanner import (
     PatternScanResult,
     VcpScanResult,
@@ -71,7 +82,15 @@ from app.dashboard.shareholding_scanner import (
     get_shareholding_scan_job,
     start_shareholding_scan_job,
 )
-from app.decision.ai_reasoning.gemini import GeminiReasoningClient, GeminiReasoningError
+from app.decision.ai_reasoning.gemini import (
+    GeminiReasoningClient,
+    GeminiReasoningError,
+    normalize_gemini_model_name,
+)
+from app.decision.ai_reasoning.openai_agents import (
+    OpenAIAgenticReasoningClient,
+    OpenAIAgenticReasoningError,
+)
 from app.decision.rule_engine import (
     DarvasDecision,
     DualListedDarvasConfig,
@@ -93,6 +112,15 @@ from app.intelligence.options import (
     OptionsScanCandidate,
     scan_underlying_options_setup,
 )
+from app.intelligence.decision_support import build_analysis_decision_context
+from app.intelligence.kronos_forecast import (
+    KronosForecastError,
+    KronosForecastResult,
+    append_forecast_history,
+    forecast_stock_direction,
+    load_adjusted_history,
+    load_kronos_predictor,
+)
 from app.intelligence.quarterly_results import (
     QuarterlyResultRecord,
     QuarterlyResultsStore,
@@ -105,6 +133,15 @@ from app.intelligence.astro.market_notes import build_astro_market_report
 from app.intelligence.astro.skyfield_provider import (
     EphemerisUnavailableError,
     SkyfieldPositionProvider,
+)
+from app.intelligence.market_strength import (
+    MarketStrengthSnapshot,
+    apply_ready_scan,
+    breakout_candidates,
+    build_market_strength_snapshot,
+    load_cached_market_histories,
+    market_strength_alerts,
+    normalized_comparison,
 )
 from app.intelligence.raw_material.adapters import YahooRawMaterialPriceAdapter
 from app.intelligence.raw_material.service import RawMaterialImpactService
@@ -122,7 +159,14 @@ from app.intelligence.technical.indicators import (
     recent_resistance,
     recent_support,
 )
-from app.models import AgentSignal, BuyingAgentReport, BuyingRecommendation, ScreeningResult
+from app.models import (
+    AgentSignal,
+    AnalysisDecisionContext,
+    AnalysisMandate,
+    BuyingAgentReport,
+    BuyingRecommendation,
+    ScreeningResult,
+)
 from app.probability.config import (
     MODEL_DIR,
     MODEL_PATH,
@@ -147,6 +191,7 @@ from app.probability.frozen_inference import (
     scan_stock_universe,
     validate_ticker,
 )
+from app.backtesting.data.yahoo import YahooDataStore, load_nifty_universe
 from app.probability.frozen_inference import (
     predict_stock as run_frozen_stock_prediction,
 )
@@ -155,6 +200,7 @@ from app.providers.fundamentals import (
     ScreenerFundamentalProvider,
     ScreenerFundamentalReport,
 )
+from app.providers.macro import YahooMacroProvider
 from app.providers.market import HistoricalBar, HistoricalDataRequest, YahooFinanceMarketProvider
 from app.providers.promoter import NseIxbrlPromoterProvider, ScreenerPromoterProvider
 
@@ -180,6 +226,11 @@ For every stock, check:
    date and explicit no-trade conditions.
 Recommend only when evidence quality, liquidity, risk-reward, and horizon suitability are acceptable.
 Always keep the output research-only and not a return guarantee."""
+
+COMPACT_AI_REASONING_RULES = """Explain why the stock is moving for a 5-20 trading-day swing view.
+Use only supplied NATIP data. Do not invent prices, news, fundamentals or events.
+Focus on trend, support/resistance, volume, relative strength, valuation, fundamentals,
+risk flags and missing critical data. Keep output concise, research-only and actionable."""
 
 IST = ZoneInfo("Asia/Kolkata")
 STREAMLIT_SECRET_PATHS = (
@@ -207,27 +258,29 @@ st.markdown(
     """
     <style>
       :root {
-        --natip-primary: #0F766E;
-        --natip-primary-hover: #115E59;
+        --natip-primary: #173f2d;
+        --natip-primary-hover: #0f3021;
         --natip-positive: #067647;
         --natip-negative: #b42318;
         --natip-warning: #b54708;
         --natip-info: #175cd3;
-        --natip-bg: #f6f8fa;
-        --natip-surface: #ffffff;
-        --natip-surface-soft: #f9fafb;
-        --natip-text: #182230;
-        --natip-muted: #667085;
-        --natip-border: #e4e7ec;
+        --natip-bg: #f7f5ed;
+        --natip-surface: #fffdf8;
+        --natip-surface-soft: #f3f0e7;
+        --natip-text: #24372b;
+        --natip-muted: #68756d;
+        --natip-border: #e2dac8;
         --natip-red: #d92d20;
         --natip-green: #039855;
         --natip-shadow: 0 8px 24px rgba(16, 24, 40, 0.06);
-        --natip-nav-inactive-bg: #ECFDF5;
-        --natip-nav-inactive-text: #134E4A;
-        --natip-nav-border: #CBD5E1;
+        --natip-nav-inactive-bg: transparent;
+        --natip-nav-inactive-text: #42534A;
+        --natip-nav-border: #DFE5E1;
       }
       .stApp {
         background: var(--natip-bg);
+        color: var(--natip-text);
+        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
       #MainMenu,
       header [data-testid="stToolbar"],
@@ -243,11 +296,13 @@ st.markdown(
         display: none;
       }
       .block-container {
-        padding-top: 1.2rem;
-        max-width: 1280px;
+        padding-top: 1rem;
+        max-width: 1380px;
       }
       h1, h2, h3, h4 {
         letter-spacing: 0;
+        color: var(--natip-text);
+        font-family: Georgia, "Times New Roman", serif;
       }
       .natip-compact-header {
         display: flex;
@@ -421,7 +476,7 @@ st.markdown(
         color: #1f2933;
       }
       div[data-testid="stMetric"] {
-        background: #ffffff;
+        background: var(--natip-surface);
         border: 1px solid var(--natip-border);
         border-radius: 8px;
         padding: 13px 14px;
@@ -438,7 +493,7 @@ st.markdown(
         background: var(--natip-primary);
         color: #ffffff;
         border: 1px solid var(--natip-primary);
-        border-radius: 6px;
+        border-radius: 999px;
         padding: .55rem 1rem;
         font-weight: 700;
       }
@@ -457,7 +512,7 @@ st.markdown(
       div[data-testid="stExpander"] {
         border: 1px solid var(--natip-border);
         border-radius: 8px;
-        background: #ffffff;
+        background: var(--natip-surface);
       }
       div[data-testid="stDataFrame"] {
         border: 1px solid var(--natip-border);
@@ -479,7 +534,7 @@ st.markdown(
         overflow-x: auto;
         padding: 10px 2px 12px;
         margin: 4px 0 14px;
-        background: rgba(246, 248, 250, 0.96);
+        background: rgba(247, 245, 237, 0.97);
         border-bottom: 1px solid var(--natip-nav-border);
         backdrop-filter: blur(10px);
       }
@@ -490,36 +545,34 @@ st.markdown(
         gap: 7px;
         flex: 0 0 auto;
         min-height: 42px;
-        padding: 9px 13px;
-        border-radius: 8px;
-        border: 1px solid var(--natip-nav-border);
+        padding: 9px 11px;
+        border-radius: 999px;
+        border: 1px solid transparent;
         background: var(--natip-nav-inactive-bg);
         color: var(--natip-nav-inactive-text) !important;
-        font-weight: 800;
+        font-weight: 720;
         font-size: .88rem;
         text-decoration: none !important;
         white-space: nowrap;
         transition: background .15s ease, color .15s ease, border-color .15s ease, transform .15s ease;
       }
       .natip-nav-tab:hover {
-        background: #CCFBF1;
-        border-color: var(--natip-primary);
-        color: #0F3F3A !important;
-        transform: translateY(-1px);
+        background: #eee9dc;
+        border-color: #ded5c1;
+        color: #17372A !important;
       }
       .natip-nav-tab:focus-visible {
         outline: 3px solid #99F6E4;
         outline-offset: 2px;
       }
       .natip-nav-tab.active {
-        background: var(--natip-primary);
-        border-color: var(--natip-primary-hover);
-        color: #FFFFFF !important;
-        box-shadow: 0 8px 18px rgba(15, 118, 110, .22);
+        background: #eee7d6;
+        border-color: #e1d6bd;
+        color: #173f2d !important;
+        box-shadow: none;
       }
       .natip-nav-icon {
-        font-size: 1rem;
-        line-height: 1;
+        display: none;
       }
       .groww-topbar {
         display: flex;
@@ -581,7 +634,7 @@ st.markdown(
         box-shadow: 0 1px 2px rgba(16, 24, 40, .03);
       }
       .groww-card {
-        background: #ffffff;
+        background: var(--natip-surface);
         border: 1px solid var(--natip-border);
         border-radius: 8px;
         padding: 16px;
@@ -661,6 +714,205 @@ st.markdown(
         color: #667085;
         background: #fcfcfd;
       }
+      .ms-page-header {
+        padding: 8px 0 18px;
+        border-bottom: 1px solid #dfe5e1;
+        margin-bottom: 14px;
+      }
+      .ms-eyebrow {
+        color: #52705f;
+        font-size: .72rem;
+        font-weight: 800;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+        margin-bottom: 7px;
+      }
+      .ms-page-title {
+        color: #17372a;
+        font-size: clamp(1.65rem, 2.4vw, 2.25rem);
+        font-weight: 820;
+        letter-spacing: 0;
+        line-height: 1.08;
+        margin: 0;
+      }
+      .ms-forecast-direction {
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 2.1rem;
+        font-weight: 700;
+        line-height: 1.15;
+        margin: 4px 0;
+      }
+      .ms-page-subtitle {
+        color: #5f6f66;
+        font-size: .92rem;
+        line-height: 1.55;
+        margin: 8px 0 0;
+        max-width: 760px;
+      }
+      .ms-status-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        padding: 10px 0 14px;
+      }
+      .ms-status-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 30px;
+        padding: 5px 9px;
+        border: 1px solid #dfe5e1;
+        border-radius: 6px;
+        background: #ffffff;
+        color: #334a3e;
+        font-size: .78rem;
+        font-weight: 700;
+      }
+      .ms-status-item strong {
+        color: #17372a;
+        font-variant-numeric: tabular-nums;
+      }
+      .ms-workspace-label {
+        color: #718078;
+        font-size: .7rem;
+        font-weight: 800;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+        margin: 4px 0 8px;
+      }
+      .ms-rail-note {
+        border-top: 1px solid #dfe5e1;
+        color: #6a776f;
+        font-size: .76rem;
+        line-height: 1.5;
+        margin-top: 14px;
+        padding-top: 12px;
+      }
+      .ms-reading {
+        border-left: 3px solid #2f6a4d;
+        background: #f1f7f3;
+        color: #294537;
+        padding: 11px 13px;
+        margin: 3px 0 15px;
+        font-size: .88rem;
+        line-height: 1.55;
+      }
+      .ms-reading strong {
+        color: #17372a;
+      }
+      .ms-section-kicker {
+        color: #52705f;
+        font-size: .7rem;
+        font-weight: 800;
+        letter-spacing: .07em;
+        text-transform: uppercase;
+        margin-bottom: 4px;
+      }
+      .ms-section-title {
+        color: #17372a;
+        font-size: 1.15rem;
+        font-weight: 800;
+        margin: 0 0 12px;
+      }
+      .ms-data-note {
+        color: #68776f;
+        font-size: .76rem;
+        line-height: 1.45;
+      }
+      .ms-source-banner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 8px 14px;
+        margin: 0 0 14px;
+        background: #203e2d;
+        color: #f7f4e9;
+        border-radius: 6px;
+        font-size: .72rem;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+      }
+      .ms-source-banner span:last-child {
+        color: #cbd8cf;
+        letter-spacing: .02em;
+        text-transform: none;
+      }
+      .ms-posture-card {
+        border: 1px solid #dedfd5;
+        border-radius: 8px;
+        background: #fffefa;
+        padding: 14px 16px;
+        margin: 8px 0 12px;
+      }
+      .ms-posture-head {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 14px;
+        color: #59645b;
+        font-size: .78rem;
+      }
+      .ms-posture-head strong { color: #263d2d; }
+      .ms-posture-dot {
+        display: inline-block;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        margin-right: 5px;
+      }
+      .ms-stage-bar {
+        display: flex;
+        width: 100%;
+        height: 7px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #ebece5;
+        margin-top: 12px;
+      }
+      .ms-stage-bar i { display: block; min-width: 2px; }
+      .ms-rs-panel {
+        border: 1px solid #dedfd5;
+        border-radius: 8px;
+        background: #fffefa;
+        padding: 18px;
+        min-height: 520px;
+      }
+      .ms-rs-label {
+        color: #6f796f;
+        font-size: .68rem;
+        font-weight: 800;
+        letter-spacing: .12em;
+        text-transform: uppercase;
+      }
+      .ms-rs-value {
+        color: #203e2d;
+        font-family: Georgia, serif;
+        font-size: 4rem;
+        line-height: 1;
+        margin: 12px 0 4px;
+      }
+      .ms-rs-change { color: #677269; font-size: .78rem; margin-bottom: 14px; }
+      .ms-check {
+        display: block;
+        padding: 4px 0;
+        color: #455449;
+        font-size: .78rem;
+      }
+      .ms-check.ok::before { content: "✓ "; color: #2f6a4d; font-weight: 900; }
+      .ms-check.no::before { content: "× "; color: #a44f49; font-weight: 900; }
+      .ms-yahoo-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 8px;
+        border-radius: 999px;
+        border: 1px solid #cfd8d1;
+        color: #2f5a42;
+        background: #f5faf6;
+        font-size: .72rem;
+        font-weight: 750;
+      }
       @media (max-width: 900px) {
         .groww-topbar {
           align-items: flex-start;
@@ -676,6 +928,16 @@ st.markdown(
         .natip-nav-tab {
           font-size: .82rem;
           min-height: 40px;
+        }
+        .ms-page-title {
+          font-size: 1.55rem;
+        }
+        .ms-status-strip {
+          gap: 6px;
+        }
+        .ms-source-banner {
+          align-items: flex-start;
+          flex-direction: column;
         }
       }
     </style>
@@ -766,7 +1028,9 @@ def _fetch_concall_summary_uncached(symbol: str) -> dict[str, Any]:
     return report.model_dump(mode="json")
 
 
-async def fetch_concall_summary_with_timeout(symbol: str, timeout_seconds: float = 12.0) -> dict[str, Any]:
+async def fetch_concall_summary_with_timeout(
+    symbol: str, timeout_seconds: float = 12.0
+) -> dict[str, Any]:
     """Fetch concall summary without blocking the whole stock-analysis workflow."""
 
     cleaned_symbol = symbol.strip().upper().replace(".NS", "")
@@ -1074,6 +1338,25 @@ def configured_gemini_api_key(settings: Settings) -> str | None:
     return settings.gemini_api_key.get_secret_value()
 
 
+def configured_openai_api_key(settings: Settings) -> str | None:
+    """Return the active OpenAI API key without exposing it in the UI."""
+
+    session_key = str(st.session_state.get("openai_api_key", "")).strip()
+    if session_key:
+        return session_key
+    if streamlit_secrets_file_exists():
+        for key_name in ("NATIP_OPENAI_API_KEY", "OPENAI_API_KEY"):
+            try:
+                secret_value = st.secrets.get(key_name)
+            except Exception:
+                secret_value = None
+            if secret_value:
+                return str(secret_value).strip()
+    if settings.openai_api_key is None:
+        return None
+    return settings.openai_api_key.get_secret_value()
+
+
 def streamlit_secrets_file_exists() -> bool:
     """Return whether Streamlit secrets can be read without missing-file warnings."""
 
@@ -1102,6 +1385,42 @@ def gemini_configuration_source(settings: Settings) -> str:
     return "Not configured"
 
 
+def openai_configuration_source(settings: Settings) -> str:
+    """Return non-secret OpenAI key source for status display."""
+
+    if str(st.session_state.get("openai_api_key", "")).strip():
+        return "Session"
+    if streamlit_secrets_file_exists():
+        for key_name in ("NATIP_OPENAI_API_KEY", "OPENAI_API_KEY"):
+            try:
+                if st.secrets.get(key_name):
+                    return "Streamlit secrets"
+            except Exception:
+                continue
+    if settings.openai_api_key is not None:
+        return "Environment/.env.local"
+    return "Not configured"
+
+
+def ai_reasoning_provider(settings: Settings) -> str:
+    """Return active AI reasoning provider."""
+
+    stored = str(st.session_state.get("ai_reasoning_provider", "")).strip()
+    if stored:
+        return stored
+    if configured_gemini_api_key(settings):
+        return "Gemini"
+    if configured_openai_api_key(settings):
+        return "OpenAI Agentic"
+    return "Rule-based"
+
+
+def openai_model(settings: Settings) -> str:
+    """Return selected OpenAI model."""
+
+    return str(st.session_state.get("openai_model", settings.openai_model)).strip()
+
+
 def gemini_enabled(settings: Settings) -> bool:
     """Return whether Gemini reasoning should run."""
 
@@ -1110,22 +1429,49 @@ def gemini_enabled(settings: Settings) -> bool:
     return bool(st.session_state.get("gemini_enabled", True))
 
 
+def openai_agentic_enabled(settings: Settings) -> bool:
+    """Return whether OpenAI agentic reasoning should run."""
+
+    return ai_reasoning_provider(settings) == "OpenAI Agentic" and bool(
+        configured_openai_api_key(settings)
+    )
+
+
 def gemini_rules() -> str:
     """Return the active NATIP reasoning rules."""
 
     return str(st.session_state.get("gemini_rules", DEFAULT_REASONING_RULES)).strip()
 
 
+def ai_request_rules() -> str:
+    """Return compact rules for API calls unless the user customized the rulebook."""
+
+    active_rules = gemini_rules()
+    if active_rules == DEFAULT_REASONING_RULES:
+        return COMPACT_AI_REASONING_RULES
+    return active_rules
+
+
 def gemini_model(settings: Settings) -> str:
     """Return selected Gemini model."""
 
-    return str(st.session_state.get("gemini_model", settings.gemini_model)).strip()
+    selected = str(st.session_state.get("gemini_model", settings.gemini_model)).strip()
+    return normalize_gemini_model_name(selected)
 
 
 def gemini_key_fingerprint(settings: Settings) -> str:
     """Return a non-secret fingerprint for the active Gemini key."""
 
     active_key = configured_gemini_api_key(settings)
+    if not active_key:
+        return "none"
+    return hashlib.sha256(active_key.encode("utf-8")).hexdigest()[:12]
+
+
+def openai_key_fingerprint(settings: Settings) -> str:
+    """Return a non-secret fingerprint for the active OpenAI key."""
+
+    active_key = configured_openai_api_key(settings)
     if not active_key:
         return "none"
     return hashlib.sha256(active_key.encode("utf-8")).hexdigest()[:12]
@@ -2417,7 +2763,7 @@ def render_critical_snapshot(
     )
     screener_report = _screener_report_or_none(screener_data)
     critical_items = [
-        ("Decision", getattr(decision, "action", "N/A")),
+        ("Decision", _final_decision_action(decision)),
         ("Confidence", f"{getattr(decision, 'confidence', 0.0) * 100:.0f}%"),
         ("Last price", _format_optional_number(quote.last_price)),
         ("Data quality", quality.status),
@@ -2477,6 +2823,7 @@ def render_decision_readiness(
         gemini_active=gemini_enabled(settings),
     )
     screener_report = _screener_report_or_none(screener_data)
+    final_action = _final_decision_action(decision)
 
     checks = [
         {
@@ -2515,13 +2862,21 @@ def render_decision_readiness(
             "Check": "Agent agreement",
             "Status": "PASS" if getattr(decision, "confidence", 0.0) >= 0.6 else "REVIEW",
             "Why it matters": "Higher confidence means agents are less conflicted.",
-            "Evidence": f"{getattr(decision, 'action', 'N/A')} at {getattr(decision, 'confidence', 0.0) * 100:.0f}% confidence",
+            "Evidence": (
+                f"{final_action} at {getattr(decision, 'confidence', 0.0) * 100:.0f}% " "confidence"
+            ),
         },
         {
             "Check": "Missing critical inputs",
-            "Status": "PASS" if not quality.warnings and not screener_data.get("error") else "REVIEW",
+            "Status": (
+                "PASS" if not quality.warnings and not screener_data.get("error") else "REVIEW"
+            ),
             "Why it matters": "Missing evidence should reduce position confidence.",
-            "Evidence": "; ".join(quality.warnings[:2]) if quality.warnings else "No major warning captured.",
+            "Evidence": (
+                "; ".join(quality.warnings[:2])
+                if quality.warnings
+                else "No major warning captured."
+            ),
         },
     ]
 
@@ -2545,8 +2900,15 @@ def render_decision_readiness(
     cols = st.columns(3)
     cols[0].metric("Readiness", readiness)
     cols[1].metric("Checks passed", f"{pass_count}/{total_count}")
-    cols[2].metric("Final action", getattr(decision, "action", "N/A"))
+    cols[2].metric("Final action", final_action)
     st.dataframe(frame, use_container_width=True, hide_index=True)
+
+
+def _final_decision_action(decision: Any) -> str:
+    """Return the auditable action while retaining legacy model compatibility."""
+
+    trace = getattr(decision, "decision_trace", None)
+    return str(trace.decision if trace is not None else getattr(decision, "action", "N/A"))
 
 
 def render_investment_analysis_framework() -> None:
@@ -2857,19 +3219,28 @@ def _numeric_from_screener_value(value: Any) -> float | None:
     return -abs(number) if is_negative else number
 
 
-def render_agent_reasoning(signals: dict[str, AgentSignal], settings: Settings) -> None:
-    """Render visible agent-wise Gemini reasoning in Fetch Analysis."""
+def render_agent_reasoning(
+    signals: dict[str, AgentSignal],
+    settings: Settings,
+    decision: TradingDecision | None = None,
+) -> None:
+    """Render visible agent-wise AI reasoning in Fetch Analysis."""
 
-    gemini_failures = [
+    decision_reasons = decision.reasons if decision is not None else []
+    ai_failures = [
         reason
-        for signal in signals.values()
-        for reason in signal.reasons
-        if reason.startswith("Gemini reasoning unavailable")
+        for reason in decision_reasons
+        if "unified reasoning unavailable" in reason or "unified reasoning timed out" in reason
     ]
+    provider = ai_reasoning_provider(settings)
     ai_label = (
-        f"Gemini aligned · {gemini_model(settings)}"
-        if gemini_enabled(settings) and not gemini_failures
-        else "Rule-based reasoning"
+        f"OpenAI unified · {openai_model(settings)}"
+        if openai_agentic_enabled(settings) and not ai_failures
+        else (
+            f"Gemini unified · {gemini_model(settings)}"
+            if gemini_enabled(settings) and provider == "Gemini" and not ai_failures
+            else "Rule-based reasoning"
+        )
     )
     st.markdown(
         f"""
@@ -2877,7 +3248,7 @@ def render_agent_reasoning(signals: dict[str, AgentSignal], settings: Settings) 
           <div class="natip-section-header">
             <div>
               <h2>Agent-wise Reasoning</h2>
-              <p>Each agent explains its signal using NATIP data and configured rules.</p>
+              <p>Specialist agents stay deterministic; optional AI explains the final consensus once.</p>
             </div>
             <div class="natip-ai-badge">{ai_label}</div>
           </div>
@@ -2885,22 +3256,35 @@ def render_agent_reasoning(signals: dict[str, AgentSignal], settings: Settings) 
         """,
         unsafe_allow_html=True,
     )
-    if not gemini_enabled(settings):
+    if provider == "OpenAI Agentic" and not configured_openai_api_key(settings):
+        st.warning(
+            "OpenAI agentic reasoning: Unavailable. Configure OPENAI_API_KEY in "
+            "Streamlit secrets or local .env.local to enable it."
+        )
+    elif provider == "Gemini" and not gemini_enabled(settings):
         st.warning(
             "Gemini enhanced reasoning: Unavailable. Using rule-based fallback. "
             "Configure NATIP_GEMINI_API_KEY in Streamlit secrets or local .env to enable it."
         )
-    elif gemini_failures:
+    elif ai_failures:
         st.warning(
-            "Gemini is configured, but the latest reasoning request failed. NATIP is showing "
-            "deterministic rule-based reasoning below. Open AI reasoning setup to test the key/model."
+            "The selected AI reasoning provider is configured, but the latest request failed. "
+            "NATIP is showing deterministic rule-based reasoning below. Use AI reasoning setup "
+            "to test the key/model."
         )
-    else:
+    elif openai_agentic_enabled(settings):
+        st.success(
+            f"OpenAI agentic reasoning: Available via {openai_configuration_source(settings)}. "
+            "It coordinates explanations across NATIP agents but cannot change deterministic scores."
+        )
+    elif provider == "Gemini":
         st.success(
             f"Gemini enhanced reasoning: Available via {gemini_configuration_source(settings)}. "
             "Gemini explains evidence only and does not change deterministic scores."
         )
-    render_fetch_gemini_setup(settings)
+    else:
+        st.info("Rule-based reasoning is active. Optional AI providers are disabled.")
+    render_fetch_ai_reasoning_setup(settings)
 
     ordered_agents = [
         ("macro", "Macro Conditions"),
@@ -2922,36 +3306,65 @@ def render_agent_reasoning(signals: dict[str, AgentSignal], settings: Settings) 
             render_agent_reasoning_card(label, signals.get(category))
 
 
-def render_fetch_gemini_setup(settings: Settings) -> None:
-    """Render compact Gemini setup controls inside Fetch Analysis."""
+_AI_SETUP_RENDERED = False
 
+
+def render_fetch_ai_reasoning_setup(settings: Settings) -> None:
+    """Render compact AI reasoning setup controls inside Fetch Analysis."""
+
+    global _AI_SETUP_RENDERED
+    if _AI_SETUP_RENDERED:
+        return
+    _AI_SETUP_RENDERED = True
     with st.expander("AI reasoning setup", expanded=False):
-        active_key = configured_gemini_api_key(settings)
+        openai_key = configured_openai_api_key(settings)
+        gemini_key = configured_gemini_api_key(settings)
         status_cols = st.columns(3)
-        status_cols[0].metric("Gemini key", "Configured" if active_key else "Missing")
-        status_cols[1].metric("Source", gemini_configuration_source(settings))
-        status_cols[2].metric("Model", gemini_model(settings))
+        status_cols[0].metric("OpenAI key", "Configured" if openai_key else "Missing")
+        status_cols[1].metric("Gemini key", "Configured" if gemini_key else "Missing")
+        status_cols[2].metric("Provider", ai_reasoning_provider(settings))
         st.caption(
-            "Gemini only improves the written reasoning. It does not change deterministic "
-            "agent scores, chart data, BUY/SELL labels or risk guardrails."
+            "AI reasoning only improves written explanations. It does not change deterministic "
+            "agent scores, chart data, BUY/SELL labels, broker behavior or risk guardrails."
         )
-        enabled = st.checkbox(
-            "Use Gemini for agent reasoning",
-            value=gemini_enabled(settings),
-            disabled=not bool(active_key),
-            key="fetch_gemini_enabled",
+        provider_options = ["OpenAI Agentic", "Gemini", "Rule-based"]
+        current_provider = ai_reasoning_provider(settings)
+        if current_provider not in provider_options:
+            current_provider = "Rule-based"
+        st.selectbox(
+            "Reasoning provider",
+            options=provider_options,
+            index=provider_options.index(current_provider),
+            key="ai_reasoning_provider",
         )
-        if active_key:
-            st.session_state["gemini_enabled"] = enabled
-        else:
-            st.info("Paste a Gemini key below or set NATIP_GEMINI_API_KEY in Streamlit secrets/.env.")
+
+        if ai_reasoning_provider(settings) == "OpenAI Agentic" and not openai_key:
+            st.info("Set OPENAI_API_KEY in Streamlit secrets or local .env.local.")
+        if ai_reasoning_provider(settings) == "Gemini" and not gemini_key:
+            st.info(
+                "Paste a Gemini key below or set NATIP_GEMINI_API_KEY in Streamlit secrets/.env."
+            )
+
+        openai_options = [
+            "gpt-4.1-mini",
+            "gpt-4.1",
+            "gpt-4o-mini",
+            "gpt-4o",
+        ]
+        current_openai_model = openai_model(settings)
+        if current_openai_model not in openai_options:
+            openai_options.insert(0, current_openai_model)
+        st.selectbox(
+            "OpenAI model",
+            options=openai_options,
+            index=openai_options.index(current_openai_model),
+            key="openai_model",
+        )
 
         model_options = [
-            "gemini-2.5-flash",
-            "gemini-flash-lite-latest",
-            "gemini-2.5-flash-lite",
-            "gemini-flash-latest",
-            "gemini-pro-latest",
+            "gemini-3.5-flash-lite",
+            "gemini-3.5-flash",
+            "gemini-3.6-flash",
         ]
         current_model = gemini_model(settings)
         if current_model not in model_options:
@@ -2963,32 +3376,67 @@ def render_fetch_gemini_setup(settings: Settings) -> None:
             key="gemini_model",
         )
 
+        entered_openai_key = st.text_input(
+            "OpenAI API key",
+            type="password",
+            placeholder="Paste key for this local session",
+            key="fetch_openai_api_key_input",
+        )
         entered_key = st.text_input(
             "Gemini API key",
             type="password",
             placeholder="Paste key for this local session",
             key="fetch_gemini_api_key_input",
         )
-        action_cols = st.columns([1, 1, 1.4])
-        if action_cols[0].button("Save key", key="fetch_save_gemini_key"):
+        action_cols = st.columns([1, 1, 1.2, 1.2])
+        if action_cols[0].button("Save OpenAI", key="fetch_save_openai_key"):
+            if entered_openai_key.strip():
+                st.session_state["openai_api_key"] = entered_openai_key.strip()
+                st.session_state["ai_reasoning_provider"] = "OpenAI Agentic"
+                clear_agent_reasoning_cache()
+                st.success("OpenAI key saved. Run analysis again to refresh agentic reasoning.")
+                st.rerun()
+            else:
+                st.warning("Paste an OpenAI API key before saving.")
+        if action_cols[1].button("Save Gemini", key="fetch_save_gemini_key"):
             if entered_key.strip():
                 st.session_state["gemini_api_key"] = entered_key.strip()
-                st.session_state["gemini_enabled"] = True
+                st.session_state["ai_reasoning_provider"] = "Gemini"
                 clear_agent_reasoning_cache()
                 st.success("Gemini key saved. Run analysis again to refresh agent reasoning.")
                 st.rerun()
             else:
                 st.warning("Paste a Gemini API key before saving.")
-        if action_cols[1].button("Clear key", key="fetch_clear_gemini_key"):
+        if action_cols[2].button("Clear session keys", key="fetch_clear_ai_keys"):
+            st.session_state.pop("openai_api_key", None)
             st.session_state.pop("gemini_api_key", None)
-            st.session_state["gemini_enabled"] = False
             clear_agent_reasoning_cache()
-            st.success("Session Gemini key cleared.")
+            st.success("Session AI keys cleared.")
             st.rerun()
-        if action_cols[2].button("Test Gemini", key="fetch_test_gemini"):
-            if not configured_gemini_api_key(settings):
-                st.warning("Gemini API key is not configured.")
-            else:
+        if action_cols[3].button("Test provider", key="fetch_test_ai_provider"):
+            provider = ai_reasoning_provider(settings)
+            if provider == "OpenAI Agentic":
+                if not configured_openai_api_key(settings):
+                    st.warning("OpenAI API key is not configured.")
+                    return
+                try:
+                    test_reasoning = asyncio.run(
+                        OpenAIAgenticReasoningClient(
+                            api_key=configured_openai_api_key(settings) or "",
+                            model=openai_model(settings),
+                            timeout_seconds=20,
+                        )._generate_reasoning(
+                            "Return only JSON with this exact schema and content: "
+                            '{"summary":"OpenAI agentic connection OK","reasons":["API key and model responded."],"risks":[],"missing_data":[]}'
+                        )
+                    )
+                    st.success(test_reasoning.summary)
+                except OpenAIAgenticReasoningError as exc:
+                    st.error(f"OpenAI test failed: {exc}")
+            elif provider == "Gemini":
+                if not configured_gemini_api_key(settings):
+                    st.warning("Gemini API key is not configured.")
+                    return
                 try:
                     test_reasoning = asyncio.run(
                         GeminiReasoningClient(
@@ -3003,6 +3451,8 @@ def render_fetch_gemini_setup(settings: Settings) -> None:
                     st.success(test_reasoning.summary)
                 except GeminiReasoningError as exc:
                     st.error(f"Gemini test failed: {exc}")
+            else:
+                st.info("Rule-based reasoning does not need an API test.")
 
 
 def render_agent_reasoning_card(label: str, signal: AgentSignal | None) -> None:
@@ -3019,14 +3469,12 @@ def render_agent_reasoning_card(label: str, signal: AgentSignal | None) -> None:
     cols[1].metric("Score", f"{signal.score:.2f}")
     cols[2].metric("Confidence", f"{signal.confidence * 100:.0f}%")
     st.write(signal.summary)
-    gemini_errors = [
-        reason for reason in signal.reasons if reason.startswith("Gemini reasoning unavailable")
-    ]
-    if gemini_errors:
-        st.warning(gemini_errors[-1])
+    ai_errors = [reason for reason in signal.reasons if "reasoning unavailable" in reason]
+    if ai_errors:
+        st.warning(ai_errors[-1])
     with st.expander("Expand reasoning", expanded=True):
         for reason in signal.reasons:
-            if reason.startswith("Gemini reasoning unavailable"):
+            if "reasoning unavailable" in reason:
                 st.error(reason)
             else:
                 st.write(reason)
@@ -3070,10 +3518,14 @@ def render_consensus_decision(decision: Any) -> None:
     """Render the consensus decision subsection."""
 
     st.markdown("### Consensus Decision")
+    trace = getattr(decision, "decision_trace", None)
+    displayed_action = trace.decision if trace is not None else decision.action
     decision_cols = st.columns([1, 1, 2])
-    decision_cols[0].metric("Agent decision", decision.action)
+    decision_cols[0].metric("Agent decision", displayed_action)
     decision_cols[1].metric("Confidence", f"{decision.confidence * 100:.0f}%")
     decision_cols[2].write(decision.summary)
+    if trace is not None and trace.hard_vetoes:
+        st.error("Hard veto: " + " | ".join(trace.hard_vetoes))
     with st.expander("Click to view consensus reasons", expanded=False):
         for reason in decision.reasons:
             st.write(reason)
@@ -3240,6 +3692,45 @@ def render_fetch_analysis(provider: YahooFinanceMarketProvider, settings: Settin
             "Astro overlays are research markers only. They are not BUY/SELL signals and remain hidden "
             "unless selected here."
         )
+    with st.expander("Research mandate and risk", expanded=False):
+        mandate_cols = st.columns(5)
+        mandate_cols[0].selectbox(
+            "Horizon",
+            options=["Swing 5-20 days", "Position 1-6 months", "Long term"],
+            key="analysis_mandate_horizon",
+        )
+        mandate_cols[1].selectbox(
+            "Risk profile",
+            options=["Conservative", "Moderate", "Aggressive"],
+            index=1,
+            key="analysis_mandate_risk_profile",
+        )
+        mandate_cols[2].number_input(
+            "Capital ₹ (optional)",
+            min_value=0.0,
+            value=float(settings.analysis_total_capital or 0.0),
+            step=10_000.0,
+            key="analysis_mandate_capital",
+        )
+        mandate_cols[3].number_input(
+            "Risk/trade %",
+            min_value=0.1,
+            max_value=5.0,
+            value=float(settings.analysis_risk_per_trade_pct),
+            step=0.1,
+            key="analysis_mandate_risk_pct",
+        )
+        mandate_cols[4].number_input(
+            "Max position %",
+            min_value=0.5,
+            max_value=100.0,
+            value=float(settings.analysis_max_position_pct),
+            step=0.5,
+            key="analysis_mandate_position_pct",
+        )
+        st.caption(
+            "Capital is used only for research position sizing. NATIP never places an order."
+        )
     symbol = symbol_from_label(selected_label)
     if custom_symbol.strip():
         symbol = custom_symbol.strip().upper().replace(".NS", "")
@@ -3311,6 +3802,8 @@ async def fetch_analysis_data(
     st.session_state.pop("nifty_chart_error", None)
     st.session_state.pop("sector_chart_error", None)
     st.session_state.pop("concall_summary", None)
+    st.session_state.pop("macro_context", None)
+    st.session_state.pop("analysis_context", None)
 
     try:
         _fetch_progress(progress, f"Fetching Yahoo quote for `{symbol}`...")
@@ -3335,6 +3828,23 @@ async def fetch_analysis_data(
         screener_fundamentals = fetch_screener_fundamentals(symbol)
         _fetch_progress(progress, f"Fetching latest Screener concall transcript for `{symbol}`...")
         concall_summary = await fetch_concall_summary_with_timeout(symbol)
+        macro_context: list[dict[str, Any]] = []
+        try:
+            _fetch_progress(progress, "Fetching free USD/INR and Brent macro context...")
+            macro_quotes = await asyncio.wait_for(
+                YahooMacroProvider().get_extended_context(),
+                timeout=12.0,
+            )
+            macro_context = [quote.model_dump(mode="json") for quote in macro_quotes]
+        except Exception as exc:
+            macro_context = [
+                {
+                    "label": "Macro context",
+                    "value": None,
+                    "source": "Yahoo Finance",
+                    "error": str(exc),
+                }
+            ]
         nifty_bars: list[HistoricalBar] = []
         try:
             _fetch_progress(progress, "Fetching Nifty 50 benchmark chart `^NSEI`...")
@@ -3400,6 +3910,7 @@ async def fetch_analysis_data(
     st.session_state["profile"] = profile
     st.session_state["screener_fundamentals"] = screener_fundamentals
     st.session_state["concall_summary"] = concall_summary
+    st.session_state["macro_context"] = macro_context
     st.session_state["selected_symbol"] = symbol
     st.session_state["selected_interval"] = interval
     st.session_state["nifty_bars"] = nifty_bars
@@ -3424,6 +3935,8 @@ def _clear_fetch_analysis_state() -> None:
         "profile",
         "screener_fundamentals",
         "concall_summary",
+        "macro_context",
+        "analysis_context",
         "selected_symbol",
         "selected_interval",
         "nifty_bars",
@@ -3441,16 +3954,49 @@ def get_or_run_fetch_decision(
     profile: dict[str, Any],
     sector: str,
     settings: Settings,
+    screener_data: dict[str, Any],
 ) -> Any:
     """Return cached Fetch Analysis agent output, running agents only when required."""
 
     selected_symbol = st.session_state["selected_symbol"]
+    mandate = current_analysis_mandate(settings)
+    macro_context = list(st.session_state.get("macro_context", []))
+    analysis_context = build_analysis_decision_context(
+        quote=quote,
+        bars=bars,
+        profile=profile,
+        sector=sector,
+        screener_data=screener_data,
+        macro_context=macro_context,
+        mandate=mandate,
+    )
+    st.session_state["analysis_context"] = analysis_context
     decision_cache_key = (
         selected_symbol,
-        gemini_enabled(settings),
+        quote.timestamp.isoformat(),
+        bars[-1].timestamp.isoformat() if bars else "missing-bars",
+        ai_reasoning_provider(settings),
         gemini_key_fingerprint(settings),
+        openai_key_fingerprint(settings),
         gemini_model(settings),
-        gemini_rules(),
+        openai_model(settings),
+        ai_request_rules(),
+        mandate.model_dump_json(),
+        (
+            analysis_context.risk.reference_as_of.isoformat()
+            if analysis_context.risk.reference_as_of
+            else "missing-reference"
+        ),
+        (
+            analysis_context.fundamentals.fetched_at.isoformat()
+            if analysis_context.fundamentals.fetched_at
+            else "missing-fundamentals"
+        ),
+        (
+            analysis_context.sector_rotation.as_of.isoformat()
+            if analysis_context.sector_rotation.as_of
+            else "missing-sector-rotation"
+        ),
     )
     if (
         "decision" not in st.session_state
@@ -3464,17 +4010,61 @@ def get_or_run_fetch_decision(
                     bars=bars,
                     profile=profile,
                     sector=str(sector),
-                    macro_context=[],
+                    macro_context=macro_context,
+                    screener_data=screener_data,
+                    mandate=mandate,
+                    analysis_context=analysis_context,
+                    decision_log_store=DecisionLogStore(settings.decision_log_path),
                     gemini_api_key=(
-                        configured_gemini_api_key(settings) if gemini_enabled(settings) else None
+                        configured_gemini_api_key(settings)
+                        if ai_reasoning_provider(settings) == "Gemini"
+                        else None
                     ),
                     gemini_model=gemini_model(settings),
-                    gemini_rules=gemini_rules(),
+                    gemini_rules=ai_request_rules(),
+                    openai_api_key=(
+                        configured_openai_api_key(settings)
+                        if ai_reasoning_provider(settings) == "OpenAI Agentic"
+                        else None
+                    ),
+                    openai_model=openai_model(settings),
+                    reasoning_provider=ai_reasoning_provider(settings),
                 )
             )
         st.session_state["decision_symbol"] = selected_symbol
         st.session_state["decision_cache_key"] = decision_cache_key
     return st.session_state["decision"]
+
+
+def current_analysis_mandate(settings: Settings) -> AnalysisMandate:
+    """Return the active research mandate from typed settings and UI controls."""
+
+    horizon_labels = {
+        "Swing 5-20 days": "swing_5_20_days",
+        "Position 1-6 months": "position_1_6_months",
+        "Long term": "long_term",
+    }
+    horizon_label = str(st.session_state.get("analysis_mandate_horizon", "Swing 5-20 days"))
+    capital = float(st.session_state.get("analysis_mandate_capital", 0.0) or 0.0)
+    return AnalysisMandate(
+        horizon=horizon_labels.get(horizon_label, "swing_5_20_days"),
+        risk_profile=str(st.session_state.get("analysis_mandate_risk_profile", "Moderate")).lower(),
+        total_capital=capital if capital > 0 else None,
+        risk_per_trade_pct=float(
+            st.session_state.get(
+                "analysis_mandate_risk_pct",
+                settings.analysis_risk_per_trade_pct,
+            )
+        ),
+        max_position_pct=float(
+            st.session_state.get(
+                "analysis_mandate_position_pct",
+                settings.analysis_max_position_pct,
+            )
+        ),
+        max_sector_exposure_pct=settings.analysis_max_sector_exposure_pct,
+        max_new_buys_per_day=settings.analysis_max_new_buys_per_day,
+    )
 
 
 def render_single_stock_dashboard() -> None:
@@ -3535,7 +4125,11 @@ def render_single_stock_dashboard() -> None:
             profile=profile,
             sector=str(sector),
             settings=settings,
+            screener_data=screener_fundamentals,
         )
+        analysis_context = st.session_state.get("analysis_context")
+        if isinstance(analysis_context, AnalysisDecisionContext):
+            render_decision_support_context(analysis_context)
         render_critical_snapshot(
             quote=quote,
             bars=bars,
@@ -3581,7 +4175,7 @@ def render_single_stock_dashboard() -> None:
 
     with consensus_tab:
         render_consensus_decision(decision)
-        render_agent_reasoning(signals, settings)
+        render_agent_reasoning(signals, settings, decision)
         render_agent_detail_tabs(
             signals=signals,
             quote=quote,
@@ -3590,10 +4184,57 @@ def render_single_stock_dashboard() -> None:
             sector=str(sector),
         )
 
+
+def render_decision_support_context(context: AnalysisDecisionContext) -> None:
+    """Render deterministic setup, sector, risk, and sizing evidence."""
+
+    st.markdown("### Decision Controls")
+    setup = context.setup
+    sector = context.sector_rotation
+    risk = context.risk
+    columns = st.columns(5)
+    columns[0].metric("Setup", setup.setup_type.replace("_", " ").title())
+    columns[1].metric("Entry status", setup.entry_status.replace("_", " ").title())
+    columns[2].metric("Sector state", sector.state.replace("_", " ").title())
+    columns[3].metric("Market regime", sector.market_regime.replace("_", " ").title())
+    columns[4].metric("Risk gates", "PASS" if not risk.hard_vetoes else "BLOCKED")
+
+    level_columns = st.columns(5)
+    level_columns[0].metric("Pivot", _format_price(setup.pivot))
+    level_columns[1].metric("Stop", _format_price(setup.stop_loss))
+    level_columns[2].metric("Target 1", _format_price(setup.target_1))
+    level_columns[3].metric("Target 2", _format_price(setup.target_2))
+    level_columns[4].metric(
+        "Reward:risk",
+        f"1:{setup.reward_risk:.2f}" if setup.reward_risk is not None else "Unavailable",
+    )
+    if risk.hard_vetoes:
+        st.error("Hard risk veto: " + " | ".join(risk.hard_vetoes))
+    elif risk.warnings:
+        st.warning("Risk data warning: " + " | ".join(risk.warnings))
+    sizing = context.position_sizing
+    if sizing.status == "CALCULATED":
+        st.caption(
+            f"Research position size: {sizing.quantity} shares · ₹{sizing.position_value:,.2f} · "
+            f"{sizing.position_size_pct:.2f}% of configured capital · maximum stop loss "
+            f"₹{sizing.max_loss_at_stop:,.2f}."
+        )
+    else:
+        st.caption("Position sizing: " + " ".join(sizing.reasons))
+
+
 def render_buying_agent(settings: Settings) -> None:
     """Render the two-stage buying-agent tab."""
 
     st.subheader("Stock Buying Agent")
+    market = st.selectbox(
+        "Market", ["India (NSE)", "US stocks"], key="buying-agent-market"
+    )
+    if market == "US stocks":
+        from app.dashboard.us_buying_agent import render_us_buying_agent
+
+        render_us_buying_agent(PROJECT_ROOT, pattern_review=render_pattern_ai_review)
+        return
     vcp_tab, darvax_tab, buying_agent_tab = st.tabs(
         [
             "VCP Pattern Check",
@@ -4649,9 +5290,11 @@ def render_vcp_pattern_scanner(
     *,
     universe_name: str,
     universe: UniverseLoadResult,
+    key_prefix: str = "",
 ) -> None:
     """Render VCP scanner for a stock universe."""
 
+    state_prefix = f"{key_prefix}-" if key_prefix else ""
     with st.container(border=True):
         st.markdown("#### VCP Pattern Scanner")
         st.caption("Screens NSE stocks for Volatility Contraction Pattern setups.")
@@ -4664,21 +5307,21 @@ def render_vcp_pattern_scanner(
             options=[365, 500, 730],
             format_func=lambda value: f"{value} days",
             index=2,
-            key=f"{universe_name}-vcp-lookback",
+            key=f"{state_prefix}{universe_name}-vcp-lookback",
         )
         max_stocks = control_cols[1].slider(
             "Stocks to scan",
             min_value=1,
             max_value=max(1, len(universe.symbols)),
             value=min(len(universe.symbols), 50),
-            key=f"{universe_name}-vcp-max-stocks",
+            key=f"{state_prefix}{universe_name}-vcp-max-stocks",
         )
         max_concurrency = control_cols[2].slider(
             "Speed",
             min_value=2,
             max_value=12,
             value=6,
-            key=f"{universe_name}-vcp-concurrency",
+            key=f"{state_prefix}{universe_name}-vcp-concurrency",
         )
         min_score = control_cols[3].slider(
             "Min VCP score",
@@ -4686,12 +5329,12 @@ def render_vcp_pattern_scanner(
             max_value=100,
             value=55,
             step=5,
-            key=f"{universe_name}-vcp-min-score",
+            key=f"{state_prefix}{universe_name}-vcp-min-score",
         )
-        button_key = f"{universe_name}-vcp-scan-button"
-        result_key = f"{universe_name}-vcp-scan-results"
-        error_key = f"{universe_name}-vcp-scan-errors"
-        persistent_key = "vcp-pattern-last-scan"
+        button_key = f"{state_prefix}{universe_name}-vcp-scan-button"
+        result_key = f"{state_prefix}{universe_name}-vcp-scan-results"
+        error_key = f"{state_prefix}{universe_name}-vcp-scan-errors"
+        persistent_key = f"{state_prefix}vcp-pattern-last-scan"
         if st.button(f"Find VCP setups in {universe_name}", key=button_key):
             selected_records = universe.symbols[:max_stocks]
             selected_symbols = [(record.symbol, record.name) for record in selected_records]
@@ -4796,8 +5439,6 @@ def render_vcp_output_ranking_results(results: list[VcpScanResult]) -> None:
         "Dist %",
         "Vol Dry %",
         "RS",
-        "FII Chg",
-        "DII Chg",
         "Breakout",
         "DarvaX",
         "Penalties",
@@ -4814,8 +5455,6 @@ def render_vcp_output_ranking_results(results: list[VcpScanResult]) -> None:
         0.75,
         0.85,
         0.6,
-        0.75,
-        0.75,
         1.05,
         1.0,
         1.7,
@@ -4842,11 +5481,9 @@ def render_vcp_output_ranking_results(results: list[VcpScanResult]) -> None:
         row[8].write(_format_optional_percent(result.distance_to_pivot_percent))
         row[9].write(_format_optional_percent(result.volume_dry_up_percent))
         row[10].write(f"{result.rs_score:.0f}")
-        row[11].write(_format_optional_percent(result.fii_change_percent))
-        row[12].write(_format_optional_percent(result.dii_change_percent))
-        row[13].write(result.breakout_status)
-        row[14].write(_format_darvax_dry_fry(result))
-        row[15].write("; ".join(result.penalties[:2]) or "None")
+        row[11].write(result.breakout_status)
+        row[12].write(_format_darvax_dry_fry(result))
+        row[13].write("; ".join(result.penalties[:2]) or "None")
     with st.expander("Ranking Reasons", expanded=False):
         for rank, result in enumerate(results, start=1):
             st.markdown(f"**{rank}. {result.symbol} · {result.company}**")
@@ -4864,9 +5501,11 @@ def render_darvax_pattern_scanner(
     *,
     universe_name: str,
     universe: UniverseLoadResult,
+    key_prefix: str = "",
 ) -> None:
     """Render scanner for stocks matching broader DarvaX chart patterns."""
 
+    state_prefix = f"{key_prefix}-" if key_prefix else ""
     with st.container(border=True):
         st.markdown("#### DarvaX Pattern Scanner")
         st.caption(
@@ -4895,28 +5534,28 @@ def render_darvax_pattern_scanner(
         interval = control_cols[0].selectbox(
             "Pattern interval",
             options=["1d", "1wk"],
-            key=f"{universe_name}-pattern-interval",
+            key=f"{state_prefix}{universe_name}-pattern-interval",
         )
         lookback_days = control_cols[1].selectbox(
             "Lookback",
             options=[180, 365, 730],
             format_func=lambda value: f"{value} days",
             index=1,
-            key=f"{universe_name}-pattern-lookback",
+            key=f"{state_prefix}{universe_name}-pattern-lookback",
         )
         max_stocks = control_cols[2].slider(
             "Stocks to scan",
             min_value=1,
             max_value=max(1, len(universe.symbols)),
             value=min(len(universe.symbols), 50),
-            key=f"{universe_name}-pattern-max-stocks",
+            key=f"{state_prefix}{universe_name}-pattern-max-stocks",
         )
         max_concurrency = control_cols[3].slider(
             "Speed",
             min_value=2,
             max_value=12,
             value=6,
-            key=f"{universe_name}-pattern-concurrency",
+            key=f"{state_prefix}{universe_name}-pattern-concurrency",
             help="Higher speed sends more Yahoo Finance requests in parallel.",
         )
         latest_window = control_cols[4].slider(
@@ -4924,12 +5563,12 @@ def render_darvax_pattern_scanner(
             min_value=1,
             max_value=10,
             value=3,
-            key=f"{universe_name}-pattern-latest-window",
+            key=f"{state_prefix}{universe_name}-pattern-latest-window",
             help="Only show patterns whose marker is on the latest N candles.",
         )
-        button_key = f"{universe_name}-darvax-pattern-scan-button"
-        result_key = f"{universe_name}-darvax-pattern-scan-results"
-        error_key = f"{universe_name}-darvax-pattern-scan-errors"
+        button_key = f"{state_prefix}{universe_name}-darvax-pattern-scan-button"
+        result_key = f"{state_prefix}{universe_name}-darvax-pattern-scan-results"
+        error_key = f"{state_prefix}{universe_name}-darvax-pattern-scan-errors"
         if st.button(f"Find DarvaX patterns in {universe_name}", key=button_key):
             selected_symbols = [
                 (record.symbol, record.name) for record in universe.symbols[:max_stocks]
@@ -4975,6 +5614,7 @@ def render_darvax_pattern_scan_results(
         return
     st.caption("Click a symbol in the table to open that stock in Analyse a Stock.")
     _render_clickable_darvax_results_table(filtered_results)
+    render_pattern_ai_review("DarvaX", filtered_results)
     if errors:
         with st.expander("Skipped Stocks"):
             for result in errors[:25]:
@@ -4994,20 +5634,13 @@ def render_vcp_pattern_scan_results(
         st.info("No VCP setup matched the selected score filter.")
         return
     st.caption("Click a symbol in the table to open that stock in Analyse a Stock.")
-    header = st.columns(
-        [0.8, 1.4, 0.75, 0.9, 0.9, 0.8, 0.7, 0.6, 0.6, 0.8, 0.75, 0.9, 1.0, 0.8, 0.8, 1.1]
-    )
+    widths = [0.8, 1.4, 0.75, 0.9, 0.75, 0.9, 1.0, 0.8, 0.8, 1.1]
+    header = st.columns(widths)
     headers = [
         "Symbol",
         "Company",
         "VCP Score",
         "DarvaX HDF",
-        "Institution",
-        "Screener",
-        "Inst Score",
-        "FII",
-        "FII Chg",
-        "DII",
         "Pivot",
         "Distance",
         "Contractions",
@@ -5018,26 +5651,7 @@ def render_vcp_pattern_scan_results(
     for column, label in zip(header, headers, strict=True):
         column.markdown(f"**{label}**")
     for index, result in enumerate(results):
-        columns = st.columns(
-            [
-                0.8,
-                1.4,
-                0.75,
-                0.9,
-                0.9,
-                0.8,
-                0.7,
-                0.6,
-                0.6,
-                0.8,
-                0.75,
-                0.9,
-                1.0,
-                0.8,
-                0.8,
-                1.1,
-            ]
-        )
+        columns = st.columns(widths)
         if columns[0].button(
             result.symbol,
             key=f"vcp-result-symbol-{result.symbol}-{index}",
@@ -5048,24 +5662,16 @@ def render_vcp_pattern_scan_results(
         columns[1].write(result.company)
         columns[2].write(f"{result.vcp_score:.1f}")
         columns[3].write(_format_darvax_dry_fry(result))
-        columns[4].write(result.shareholding_status)
-        columns[5].write(result.screener_rule_status)
-        columns[6].write(
-            "N/A" if result.institutional_score is None else f"{result.institutional_score:.1f}"
-        )
-        columns[7].write(_format_optional_percent(result.fii_latest))
-        columns[8].write(_format_optional_percent(result.fii_change_percent))
-        columns[9].write(_format_optional_percent(result.dii_latest))
-        columns[10].write(_format_optional_number(result.pivot))
-        columns[11].write(
+        columns[4].write(_format_optional_number(result.pivot))
+        columns[5].write(
             "N/A"
             if result.distance_to_pivot_percent is None
             else f"{result.distance_to_pivot_percent:.2f}%"
         )
-        columns[12].write(result.contraction_text)
-        columns[13].write(result.breakout_status)
-        columns[14].write(_format_optional_number(result.latest_close))
-        columns[15].write(result.latest_timestamp.isoformat() if result.latest_timestamp else "N/A")
+        columns[6].write(result.contraction_text)
+        columns[7].write(result.breakout_status)
+        columns[8].write(_format_optional_number(result.latest_close))
+        columns[9].write(result.latest_timestamp.isoformat() if result.latest_timestamp else "N/A")
     with st.expander("VCP Reasons", expanded=False):
         for result in results:
             st.markdown(f"**{result.symbol} · {result.company}**")
@@ -5074,10 +5680,279 @@ def render_vcp_pattern_scan_results(
                 st.write(reason)
             for reason in result.reasons:
                 st.write(reason)
+    render_pattern_ai_review("VCP", results)
     if errors:
         with st.expander("Skipped Stocks"):
             for result in errors[:25]:
                 st.write(f"{result.symbol}: {result.error or 'No usable chart data.'}")
+
+
+def render_pattern_ai_review(
+    strategy: str,
+    results: list[VcpScanResult] | list[PatternScanResult],
+) -> None:
+    """Render an on-demand, evidence-constrained AI review for one scan result."""
+
+    if not results:
+        return
+    settings = get_settings()
+    normalized_strategy = strategy.casefold().replace(" ", "-")
+    st.markdown("#### AI Pattern Review")
+    st.caption(
+        "Select one stock and request one AI review. The review explains existing scanner "
+        "evidence; it cannot change scores, ranking, or NATIP's deterministic decisions."
+    )
+    with st.expander("What Gemini is asked to explain", expanded=False):
+        st.write(
+            "Gemini must return one self-contained explanation covering why the stock looks "
+            "strong or weak, the VCP/DarvaX and price-volume evidence, FII/DII holding changes, "
+            "the strongest counterargument, missing evidence, conditional action, and invalidation."
+        )
+        st.caption(
+            "FII/DII motives are never inferred from holding percentages. If no verified motive "
+            "is supplied, Gemini must say that the reason for the holding change is unknown."
+        )
+    render_fetch_ai_reasoning_setup(settings)
+
+    labels_by_result = {f"{result.symbol} — {result.company}": result for result in results}
+    selected_label = st.selectbox(
+        "Stock to review",
+        options=list(labels_by_result),
+        key=f"{normalized_strategy}-ai-review-symbol",
+    )
+    selected_result = labels_by_result[selected_label]
+    payload = _pattern_scan_ai_payload(strategy, selected_result)
+    from app.decision.ai_reasoning.research_frameworks import pattern_context, validate_references
+
+    context = pattern_context(strategy, payload)
+    payload["research_framework"] = context["framework"]
+    st.caption(f"Research perspective: {context['framework']['name']} · {context['framework']['version']}")
+    payload_signature = hashlib.sha256(
+        json.dumps({"payload": payload, "provider": ai_reasoning_provider(settings),
+                    "model": gemini_model(settings) if ai_reasoning_provider(settings) == "Gemini" else openai_model(settings),
+                    "rules": ai_request_rules()}, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    result_key = f"{normalized_strategy}-ai-review-result"
+    error_key = f"{normalized_strategy}-ai-review-error"
+
+    if st.button(
+        "Explain selected setup with AI",
+        key=f"{normalized_strategy}-ai-review-button",
+        type="secondary",
+        disabled=isinstance(st.session_state.get(result_key), dict) and st.session_state[result_key].get("payload_signature") == payload_signature,
+    ):
+        provider_name = ai_reasoning_provider(settings)
+        try:
+            with st.spinner(f"Reviewing {selected_result.symbol} with {provider_name}..."):
+                if provider_name == "Gemini":
+                    api_key = configured_gemini_api_key(settings)
+                    if not api_key:
+                        raise GeminiReasoningError("Gemini API key is not configured.")
+                    reasoning = asyncio.run(
+                        GeminiReasoningClient(
+                            api_key=api_key,
+                            model=gemini_model(settings),
+                            timeout_seconds=30,
+                        ).explain_pattern_scan(
+                            strategy=strategy,
+                            pattern_payload=payload,
+                            rules=ai_request_rules(),
+                        )
+                    )
+                elif provider_name == "OpenAI Agentic":
+                    api_key = configured_openai_api_key(settings)
+                    if not api_key:
+                        raise OpenAIAgenticReasoningError("OpenAI API key is not configured.")
+                    reasoning = asyncio.run(
+                        OpenAIAgenticReasoningClient(
+                            api_key=api_key,
+                            model=openai_model(settings),
+                            timeout_seconds=30,
+                        ).explain_pattern_scan(
+                            strategy=strategy,
+                            pattern_payload=payload,
+                            rules=ai_request_rules(),
+                        )
+                    )
+                else:
+                    raise GeminiReasoningError(
+                        "Choose Gemini or OpenAI Agentic in AI reasoning setup."
+                    )
+            reasoning = validate_references(reasoning, context["evidence"])
+            st.session_state[result_key] = {
+                "symbol": selected_result.symbol,
+                "provider": provider_name,
+                "payload_signature": payload_signature,
+                "reasoning": reasoning.model_dump(mode="json"),
+            }
+            st.session_state.pop(error_key, None)
+        except (GeminiReasoningError, OpenAIAgenticReasoningError, ValueError) as exc:
+            st.session_state[error_key] = {"signature": payload_signature, "message": str(exc)}
+
+    error = st.session_state.get(error_key)
+    if isinstance(error, dict) and error.get("signature") == payload_signature:
+        st.error(f"AI pattern review unavailable: {error['message']}")
+    elif isinstance(error, str):
+        st.session_state.pop(error_key, None)
+
+    saved = st.session_state.get(result_key)
+    if not isinstance(saved, dict):
+        _render_pattern_institutional_evidence(payload)
+        return
+    if (
+        saved.get("symbol") != selected_result.symbol
+        or saved.get("payload_signature") != payload_signature
+    ):
+        _render_pattern_institutional_evidence(payload)
+        return
+
+    reasoning = dict(saved.get("reasoning") or {})
+    decision = str(reasoning.get("decision") or "WATCH").strip().upper()
+    if decision == "BUY":
+        decision = "BUY CANDIDATE"
+    confidence = reasoning.get("confidence")
+    confidence_text = (
+        f"{int(confidence)}%" if isinstance(confidence, int | float) else "Unavailable"
+    )
+    institutional_text = _pattern_institutional_evidence_text(payload)
+    with st.container(border=True):
+        st.markdown("**Unified AI reasoning**")
+        st.caption(
+            f"{selected_result.symbol} · {strategy} · {saved.get('provider') or 'AI'} · "
+            f"{decision} · confidence {confidence_text}"
+        )
+        st.write(str(reasoning.get("summary") or "No summary returned."))
+        st.write("Strongest counterargument: " + str(reasoning.get("strongest_counterargument") or "Not supplied"))
+        reasons = [str(item) for item in list(reasoning.get("reasons") or [])[:3]]
+        risks = [str(item) for item in list(reasoning.get("risks") or [])[:3]]
+        if reasons:
+            st.write("Supporting evidence: " + " | ".join(reasons))
+        if risks:
+            st.write("Counterarguments and risks: " + " | ".join(risks))
+        st.write(institutional_text)
+        missing = [str(item) for item in list(reasoning.get("missing_data") or [])[:5]]
+        if missing:
+            st.write("Missing critical evidence: " + "; ".join(missing))
+        st.write(
+            "Conditional action: "
+            + str(reasoning.get("next_action") or reasoning.get("entry_condition") or decision)
+        )
+        st.write(
+            "Invalidation: "
+            + str(reasoning.get("invalidation_trigger") or "Not established from scan data")
+        )
+    with st.expander("Structured levels returned by AI", expanded=False):
+        st.write(f"Entry condition: {reasoning.get('entry_condition') or 'Unavailable'}")
+        st.write(f"Entry range: {reasoning.get('entry_range') or 'Unavailable'}")
+        st.write(f"Stop loss: {reasoning.get('stop_loss') or 'Unavailable'}")
+        st.write(f"Target: {reasoning.get('target') or 'Unavailable'}")
+        st.write(f"Reward-to-risk: {reasoning.get('reward_to_risk') or 'Unavailable'}")
+    st.caption(
+        "AI research view only. Confirm the full technical, fundamental, valuation, liquidity, "
+        "and risk analysis before taking any action. AI confidence is not a calibrated "
+        "probability of investment success."
+    )
+    st.dataframe(pd.DataFrame(context["evidence"]), hide_index=True)
+
+
+def _pattern_scan_ai_payload(
+    strategy: str,
+    result: VcpScanResult | PatternScanResult,
+) -> dict[str, Any]:
+    """Return only verified scanner fields for AI explanation."""
+
+    if isinstance(result, VcpScanResult):
+        return {
+            "strategy": strategy,
+            "symbol": result.symbol,
+            "company": result.company,
+            "data_timestamp": (
+                result.latest_timestamp.isoformat() if result.latest_timestamp else None
+            ),
+            "latest_close": result.latest_close,
+            "vcp_score": result.vcp_score,
+            "trigger_score": result.trigger_score,
+            "action_score": result.action_score,
+            "pivot": result.pivot,
+            "distance_to_pivot_percent": result.distance_to_pivot_percent,
+            "contractions_percent": list(result.contraction_sequence),
+            "final_contraction_percent": result.final_contraction_percent,
+            "volume_dry_up_percent": result.volume_dry_up_percent,
+            "relative_strength_score": result.rs_score,
+            "breakout_status": result.breakout_status,
+            "darvax_confirmation": result.darvax_dry_fry_status,
+            "darvax_confidence": result.darvax_dry_fry_confidence,
+            "institutional_data_status": result.shareholding_status,
+            "institutional_score": result.institutional_score,
+            "fii_latest_percent": result.fii_latest,
+            "fii_change_percent": result.fii_change_percent,
+            "dii_latest_percent": result.dii_latest,
+            "dii_change_percent": result.dii_change_percent,
+            "scanner_rule_status": result.screener_rule_status,
+            "scanner_rule_reasons": list(result.screener_rule_reasons),
+            "reasons": list(result.reasons),
+            "penalties": list(result.penalties),
+            "explicitly_unavailable": [
+                "institutional motives",
+                "verified news catalysts",
+                "complete valuation",
+                "complete risk and liquidity assessment",
+            ],
+        }
+    return {
+        "strategy": strategy,
+        "symbol": result.symbol,
+        "company": result.company,
+        "data_timestamp": (
+            result.latest_timestamp.isoformat() if result.latest_timestamp else None
+        ),
+        "latest_close": result.latest_close,
+        "pattern_names": [pattern.name for pattern in result.patterns],
+        "pattern_confidences": {pattern.name: pattern.confidence for pattern in result.patterns},
+        "pattern_quality_score": result.pattern_quality_score,
+        "pattern_quality_label": result.pattern_quality_label,
+        "quality_notes": list(result.quality_notes),
+        "data_points": result.data_points,
+        "explicitly_unavailable": [
+            "FII/DII holding changes",
+            "institutional motives",
+            "verified news catalysts",
+            "fundamental and valuation confirmation",
+            "complete risk, liquidity and reward-to-risk assessment",
+        ],
+    }
+
+
+def _render_pattern_institutional_evidence(payload: dict[str, Any]) -> None:
+    """Explain exactly what institutional scanner data can and cannot establish."""
+
+    st.info(_pattern_institutional_evidence_text(payload))
+
+
+def _pattern_institutional_evidence_text(payload: dict[str, Any]) -> str:
+    """Return the institutional evidence statement for one scanner payload."""
+
+    if payload.get("strategy") != "VCP":
+        return (
+            "FII/DII evidence is not collected by the DarvaX chart scan. Run complete stock "
+            "analysis or use verified shareholding filings before drawing an institutional conclusion."
+        )
+    fii_change = payload.get("fii_change_percent")
+    dii_change = payload.get("dii_change_percent")
+    if fii_change is None and dii_change is None:
+        return (
+            "No verified FII/DII quarter-on-quarter change is available for this result. "
+            "NATIP cannot state that institutions are buying or explain their motives."
+        )
+    parts = []
+    if fii_change is not None:
+        parts.append(f"FII/FPI holding change: {float(fii_change):+.2f} percentage points")
+    if dii_change is not None:
+        parts.append(f"DII/MF holding change: {float(dii_change):+.2f} percentage points")
+    return (
+        "Institutional evidence: " + "; ".join(parts) + ". This shows disclosed holding "
+        "movement, not the institutions' reason for buying or selling."
+    )
 
 
 def render_shareholding_scan_results(
@@ -5447,10 +6322,19 @@ def render_buying_universe(
                     profile_fetcher=fetch_company_profile,
                     max_recommendations=max_recommendations,
                     gemini_api_key=(
-                        configured_gemini_api_key(settings) if gemini_enabled(settings) else None
+                        configured_gemini_api_key(settings)
+                        if ai_reasoning_provider(settings) == "Gemini"
+                        else None
                     ),
                     gemini_model=gemini_model(settings),
-                    gemini_rules=gemini_rules(),
+                    gemini_rules=ai_request_rules(),
+                    openai_api_key=(
+                        configured_openai_api_key(settings)
+                        if ai_reasoning_provider(settings) == "OpenAI Agentic"
+                        else None
+                    ),
+                    openai_model=openai_model(settings),
+                    reasoning_provider=ai_reasoning_provider(settings),
                 )
             )
 
@@ -5639,14 +6523,9 @@ def render_rules_api(settings: Settings) -> None:
         st.info("Paste a Gemini API key below or set NATIP_GEMINI_API_KEY in `.env`.")
 
     model_options = [
-        "gemini-2.5-flash",
-        "gemini-flash-lite-latest",
-        "gemini-2.5-flash-lite",
-        "gemini-flash-latest",
-        "gemini-pro-latest",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash",
         "gemini-3.5-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-3.6-flash",
     ]
     default_model = gemini_model(settings)
     if default_model not in model_options:
@@ -6624,7 +7503,9 @@ def render_sector_rotation_tab() -> None:
 
     available_dates = _sector_rotation_available_history_dates(history_path)
     latest_available_date = available_dates[-1] if available_dates else None
-    previous_available_date = available_dates[-2] if len(available_dates) >= 2 else latest_available_date
+    previous_available_date = (
+        available_dates[-2] if len(available_dates) >= 2 else latest_available_date
+    )
     controls = st.columns([1.1, 1.1, 1, 1.1])
     with controls[0]:
         date_mode = st.radio(
@@ -6683,11 +7564,7 @@ def render_sector_rotation_tab() -> None:
     if date_changed:
         st.info("As-of date changed. Rebuilding Sector Rotation for the selected date...")
 
-    if (
-        "sector_rotation_result" not in st.session_state
-        and as_of_date is None
-        and not run_clicked
-    ):
+    if "sector_rotation_result" not in st.session_state and as_of_date is None and not run_clicked:
         cached = _load_cached_sector_rotation(latest_path, summary_path, history_path)
         if cached is not None:
             st.session_state["sector_rotation_result"] = cached
@@ -6809,9 +7686,7 @@ def render_sector_rotation_tab() -> None:
                     "color": [color_map.get(str(state), "#667085") for state in table["State"]],
                     "line": {"width": 1, "color": "#ffffff"},
                 },
-                customdata=table[
-                    ["Sector", "State", "20D vs Market", "Breadth50", "ΔBreadth10D"]
-                ],
+                customdata=table[["Sector", "State", "20D vs Market", "Breadth50", "ΔBreadth10D"]],
                 hovertemplate=(
                     "<b>%{text}</b><br>"
                     "Leadership %{x:.1f}<br>"
@@ -7645,9 +8520,11 @@ def render_astro_research_tab(settings: Settings) -> None:
                 raw_rows = [
                     {
                         "Field": key,
-                        "Value": json.dumps(value, default=str)
-                        if isinstance(value, (dict, list))
-                        else value,
+                        "Value": (
+                            json.dumps(value, default=str)
+                            if isinstance(value, (dict, list))
+                            else value
+                        ),
                     }
                     for key, value in feature_payload.items()
                 ]
@@ -7724,13 +8601,21 @@ def render_astro_research_tab(settings: Settings) -> None:
             ]
         )
         with report_tabs[0]:
-            st.dataframe(pd.DataFrame(report.planetary_data), use_container_width=True, hide_index=True)
+            st.dataframe(
+                pd.DataFrame(report.planetary_data), use_container_width=True, hide_index=True
+            )
         with report_tabs[1]:
-            st.dataframe(pd.DataFrame(report.event_table), use_container_width=True, hide_index=True)
+            st.dataframe(
+                pd.DataFrame(report.event_table), use_container_width=True, hide_index=True
+            )
         with report_tabs[2]:
-            st.dataframe(pd.DataFrame(report.sector_watchlist), use_container_width=True, hide_index=True)
+            st.dataframe(
+                pd.DataFrame(report.sector_watchlist), use_container_width=True, hide_index=True
+            )
         with report_tabs[3]:
-            st.dataframe(pd.DataFrame(report.important_windows), use_container_width=True, hide_index=True)
+            st.dataframe(
+                pd.DataFrame(report.important_windows), use_container_width=True, hide_index=True
+            )
         with report_tabs[4]:
             for note in report.market_notes:
                 st.write(note)
@@ -7828,7 +8713,9 @@ def render_research_lab_astro_snapshot(settings: Settings) -> None:
             shadow_only=True,
             max_score_adjustment=0.0,
             ephemeris_path=settings.astro_ephemeris_path,
-            feature_store=JsonlFeatureStore(PROJECT_ROOT / "data" / "feature_store" / "astro.jsonl"),
+            feature_store=JsonlFeatureStore(
+                PROJECT_ROOT / "data" / "feature_store" / "astro.jsonl"
+            ),
         )
         try:
             with st.spinner("Generating research snapshot..."):
@@ -7849,11 +8736,15 @@ def render_research_lab_astro_snapshot(settings: Settings) -> None:
                 st.caption(str(exc))
     result = st.session_state.get("research_lab_astro_snapshot")
     if not result:
-        _render_empty_state("No snapshot generated yet", "Choose symbol/date/time and click Generate Snapshot.")
+        _render_empty_state(
+            "No snapshot generated yet", "Choose symbol/date/time and click Generate Snapshot."
+        )
         return
     evidence = result.get("evidence") or {}
     metric_cols = st.columns(4)
-    metric_cols[0].metric("Research status", "Available" if result.get("available") else "Unavailable")
+    metric_cols[0].metric(
+        "Research status", "Available" if result.get("available") else "Unavailable"
+    )
     metric_cols[1].metric("Astro regime", str(result.get("astro_regime") or "N/A"))
     metric_cols[2].metric("Lunar phase", _format_optional_number(evidence.get("lunar_phase_angle")))
     metric_cols[3].metric("Data timestamp", _relative_time_display(datetime.now(UTC)))
@@ -7861,7 +8752,9 @@ def render_research_lab_astro_snapshot(settings: Settings) -> None:
         st.warning(str(result["warning"]))
     if evidence:
         st.info(_astro_plain_english_interpretation(result, evidence))
-        st.dataframe(_astro_influence_table(result, evidence), use_container_width=True, hide_index=True)
+        st.dataframe(
+            _astro_influence_table(result, evidence), use_container_width=True, hide_index=True
+        )
     else:
         st.info("No experimental astro evidence was available for this timestamp.")
 
@@ -7871,7 +8764,9 @@ def render_research_lab_market_notes(settings: Settings) -> None:
 
     st.markdown("### Market Research Notes")
     note_cols = st.columns([1, 1, 1, 1])
-    note_start_date = note_cols[0].date_input("Start date", value=date.today(), key="lab_note_start")
+    note_start_date = note_cols[0].date_input(
+        "Start date", value=date.today(), key="lab_note_start"
+    )
     note_end_date = note_cols[1].date_input(
         "End date", value=date.today() + timedelta(days=7), key="lab_note_end"
     )
@@ -7910,14 +8805,18 @@ def render_research_lab_market_notes(settings: Settings) -> None:
                 st.caption(str(exc))
     report = st.session_state.get("research_lab_market_report")
     if not report:
-        _render_empty_state("No market notes generated yet", "Select a range and click Generate Research Notes.")
+        _render_empty_state(
+            "No market notes generated yet", "Select a range and click Generate Research Notes."
+        )
         return
     st.markdown("#### Executive summary")
     for note in report.market_notes[:5]:
         st.write(note)
     output_tabs = st.tabs(["Timeline", "Important Events", "Limitations"])
     with output_tabs[0]:
-        st.dataframe(pd.DataFrame(report.important_windows), use_container_width=True, hide_index=True)
+        st.dataframe(
+            pd.DataFrame(report.important_windows), use_container_width=True, hide_index=True
+        )
     with output_tabs[1]:
         st.dataframe(pd.DataFrame(report.event_table), use_container_width=True, hide_index=True)
     with output_tabs[2]:
@@ -7944,8 +8843,7 @@ def render_astro_chart_reaction_screener(settings: Settings) -> None:
         "completed events; future rows are only watchlist candidates."
     )
     with st.expander("How to interpret the screener", expanded=False):
-        st.markdown(
-            """
+        st.markdown("""
             - **Working? = YES** means the stock chart showed measurable reaction near an astro
               event window.
             - **Reaction Score** is based on post-event price move, excess move versus Nifty,
@@ -7956,8 +8854,7 @@ def render_astro_chart_reaction_screener(settings: Settings) -> None:
               SELL signals. Use it only as a research filter beside normal technical analysis.
             - **Future Watchlist** means an astro window is coming and the chart is already near
               support/resistance or compressed. Direction is not known beforehand.
-            """
-        )
+            """)
 
     stock_past_tab, stock_future_tab, index_past_tab, index_future_tab = st.tabs(
         [
@@ -8085,8 +8982,8 @@ def render_past_astro_chart_reaction_scanner(settings: Settings) -> None:
     if matched_frame.empty:
         st.warning("No chart-reaction rows were produced for the selected universe/window.")
     else:
-        matched_frame["Working?"] = matched_frame["reaction_score"].ge(min_score).map(
-            {True: "YES", False: "NO"}
+        matched_frame["Working?"] = (
+            matched_frame["reaction_score"].ge(min_score).map({True: "YES", False: "NO"})
         )
         display = matched_frame.rename(
             columns={
@@ -8135,7 +9032,9 @@ def render_past_astro_chart_reaction_scanner(settings: Settings) -> None:
         filtered = display[display["Working?"].eq("YES")][columns]
         all_rows = display[columns]
         st.metric("Events checked", len(scan.get("events") or []))
-        st.dataframe(filtered if not filtered.empty else all_rows, use_container_width=True, hide_index=True)
+        st.dataframe(
+            filtered if not filtered.empty else all_rows, use_container_width=True, hide_index=True
+        )
         if filtered.empty:
             st.caption("No rows met the current minimum score, so all scored rows are shown.")
         else:
@@ -8259,7 +9158,9 @@ def render_future_astro_trend_watchlist(settings: Settings) -> None:
 
     scan = st.session_state.get("future_astro_watch_scan")
     if not scan:
-        st.info("Run the future watchlist to find stocks technically sensitive before upcoming windows.")
+        st.info(
+            "Run the future watchlist to find stocks technically sensitive before upcoming windows."
+        )
         return
 
     events_frame = pd.DataFrame(scan.get("events") or [])
@@ -8271,7 +9172,13 @@ def render_future_astro_trend_watchlist(settings: Settings) -> None:
                     display_events["timestamp"], errors="coerce"
                 ).dt.date
             st.dataframe(
-                display_events[[column for column in ["timestamp", "priority", "event", "interpretation"] if column in display_events.columns]],
+                display_events[
+                    [
+                        column
+                        for column in ["timestamp", "priority", "event", "interpretation"]
+                        if column in display_events.columns
+                    ]
+                ],
                 use_container_width=True,
                 hide_index=True,
             )
@@ -8280,8 +9187,8 @@ def render_future_astro_trend_watchlist(settings: Settings) -> None:
     if matched_frame.empty:
         st.warning("No future trend-change watchlist rows were produced.")
     else:
-        matched_frame["Watch?"] = matched_frame["watch_score"].ge(min_score).map(
-            {True: "YES", False: "NO"}
+        matched_frame["Watch?"] = (
+            matched_frame["watch_score"].ge(min_score).map({True: "YES", False: "NO"})
         )
         display = matched_frame.rename(
             columns={
@@ -8335,11 +9242,17 @@ def render_future_astro_trend_watchlist(settings: Settings) -> None:
         columns = [column for column in columns if column in display.columns]
         filtered = display[display["Watch?"].eq("YES")][columns]
         st.metric("Upcoming windows checked", len(scan.get("events") or []))
-        st.dataframe(filtered if not filtered.empty else display[columns], use_container_width=True, hide_index=True)
+        st.dataframe(
+            filtered if not filtered.empty else display[columns],
+            use_container_width=True,
+            hide_index=True,
+        )
         if filtered.empty:
             st.caption("No rows met the selected watch score, so all scored rows are shown.")
         else:
-            st.caption("These are research-only technical watch candidates before upcoming astro windows.")
+            st.caption(
+                "These are research-only technical watch candidates before upcoming astro windows."
+            )
 
     error_frame = pd.DataFrame(scan.get("errors") or [])
     if not error_frame.empty:
@@ -8373,8 +9286,8 @@ def _render_past_astro_scan_table(
     if matched_frame.empty:
         st.warning("No chart-reaction rows were produced for the selected window.")
     else:
-        matched_frame["Working?"] = matched_frame["reaction_score"].ge(min_score).map(
-            {True: "YES", False: "NO"}
+        matched_frame["Working?"] = (
+            matched_frame["reaction_score"].ge(min_score).map({True: "YES", False: "NO"})
         )
         display = matched_frame.rename(
             columns={
@@ -8422,7 +9335,11 @@ def _render_past_astro_scan_table(
         columns = [column for column in columns if column in display.columns]
         filtered = display[display["Working?"].eq("YES")][columns]
         st.metric("Events checked", len(scan.get("events") or []))
-        st.dataframe(filtered if not filtered.empty else display[columns], use_container_width=True, hide_index=True)
+        st.dataframe(
+            filtered if not filtered.empty else display[columns],
+            use_container_width=True,
+            hide_index=True,
+        )
         if filtered.empty:
             st.caption("No rows met the current minimum score, so all scored rows are shown.")
         else:
@@ -8475,8 +9392,8 @@ def _render_future_astro_scan_table(
     if matched_frame.empty:
         st.warning("No future trend-change watchlist rows were produced.")
     else:
-        matched_frame["Watch?"] = matched_frame["watch_score"].ge(min_score).map(
-            {True: "YES", False: "NO"}
+        matched_frame["Watch?"] = (
+            matched_frame["watch_score"].ge(min_score).map({True: "YES", False: "NO"})
         )
         display = matched_frame.rename(
             columns={
@@ -8530,11 +9447,17 @@ def _render_future_astro_scan_table(
         columns = [column for column in columns if column in display.columns]
         filtered = display[display["Watch?"].eq("YES")][columns]
         st.metric("Upcoming windows checked", len(scan.get("events") or []))
-        st.dataframe(filtered if not filtered.empty else display[columns], use_container_width=True, hide_index=True)
+        st.dataframe(
+            filtered if not filtered.empty else display[columns],
+            use_container_width=True,
+            hide_index=True,
+        )
         if filtered.empty:
             st.caption("No rows met the selected watch score, so all scored rows are shown.")
         else:
-            st.caption("These are research-only technical watch candidates before upcoming astro windows.")
+            st.caption(
+                "These are research-only technical watch candidates before upcoming astro windows."
+            )
 
     error_frame = pd.DataFrame(scan.get("errors") or [])
     if not error_frame.empty:
@@ -9316,13 +10239,28 @@ def render_raw_material_impact_tab() -> None:
     top_cols = st.columns([1, 1, 2])
     if top_cols[0].button("Refresh raw-material prices"):
         try:
-            inserted = refresh_raw_material_prices(service)
-            st.success(f"Refresh complete. Added {inserted} new price row(s).")
+            from app.intelligence.raw_material.catalogue import refresh_daily_materials, load_monthly_commodities
+            progress = st.progress(0.0)
+            report = refresh_daily_materials(service, on_progress=lambda done, total, name: progress.progress(done / total, text=f"{done}/{total}: {name}"))
+            st.session_state["raw-material-refresh-report"] = report
+            st.success(f"Daily refresh finished: {int(report['Status'].eq('UPDATED').sum())}/{len(report)} feeds available.")
+            try:
+                with st.spinner("Updating the World Bank monthly commodity catalogue..."):
+                    load_monthly_commodities(PROJECT_ROOT, update=True)
+            except Exception as exc:
+                st.warning(f"Monthly catalogue refresh unavailable; saved data retained: {exc}")
             st.cache_data.clear()
         except Exception as exc:
             st.error(f"Raw-material refresh failed: {exc}")
     top_cols[1].metric("Tracked materials", len(service.materials()))
-    top_cols[2].info("Unverified template mappings are shown as Insufficient Data until filing evidence is added.")
+    top_cols[2].info(
+        "Unverified template mappings are shown as Insufficient Data until filing evidence is added."
+    )
+    st.caption("Open Materials for all configured daily feeds and the full searchable World Bank monthly commodity catalogue. Rubber and palm oil are available as monthly references, not daily Yahoo quotes.")
+    report = st.session_state.get("raw-material-refresh-report")
+    if report is not None:
+        with st.expander("Latest commodity refresh report", expanded=report["Status"].eq("UNAVAILABLE").any()):
+            st.dataframe(report, hide_index=True)
 
     tabs = st.tabs(["Overview", "Stock Exposure", "Materials", "Data Quality"])
     with tabs[0]:
@@ -9344,14 +10282,10 @@ def render_raw_material_impact_tab() -> None:
 def refresh_raw_material_prices(service: RawMaterialImpactService) -> int:
     """Refresh available raw-material Yahoo fallback prices."""
 
-    adapter = YahooRawMaterialPriceAdapter()
-    end = datetime.now(UTC)
-    start = end - timedelta(days=460)
-    inserted = 0
-    for material in service.materials():
-        points = adapter.fetch_history(material, start=start, end=end)
-        inserted += service.store.add_price_points(points)
-    return inserted
+    from app.intelligence.raw_material.catalogue import refresh_daily_materials
+
+    report = refresh_daily_materials(service)
+    return int(report["New Rows"].sum()) if not report.empty else 0
 
 
 def render_raw_material_overview(service: RawMaterialImpactService) -> None:
@@ -9369,7 +10303,9 @@ def render_raw_material_overview(service: RawMaterialImpactService) -> None:
 
     watchlist = raw_material_watchlist_frame(service)
     if watchlist.empty:
-        _render_empty_state("No raw-material watchlist rows", "Add mappings and refresh material prices.")
+        _render_empty_state(
+            "No raw-material watchlist rows", "Add mappings and refresh material prices."
+        )
         return
     render_raw_material_pressure_summary(watchlist)
     filters = st.columns([1, 1, 1, 1])
@@ -9445,7 +10381,9 @@ def render_raw_material_pressure_summary(watchlist: pd.DataFrame) -> None:
                 "90D Change": latest.get("90D Change", "Data unavailable"),
                 "Volatility": latest.get("Volatility Regime", "Data unavailable"),
                 "Main Read": _material_summary_read(headwinds, tailwinds, exposed),
-                "Action": _material_summary_action(latest.get("Trend Regime"), latest.get("Volatility Regime"), headwinds),
+                "Action": _material_summary_action(
+                    latest.get("Trend Regime"), latest.get("Volatility Regime"), headwinds
+                ),
             }
         )
     st.markdown("### Material Pressure Summary")
@@ -9530,14 +10468,18 @@ def render_raw_material_indexed_chart(
 
     history = service.store.price_history(material_id)
     if history.empty:
-        st.info("Raw-material price history is unavailable. Click refresh or import a licensed source.")
+        st.info(
+            "Raw-material price history is unavailable. Click refresh or import a licensed source."
+        )
         return
     clean = history.dropna(subset=["price"]).copy()
     if clean.empty:
         st.info("Raw-material price history has no usable prices.")
         return
     clean["Indexed Raw Material"] = pd.to_numeric(clean["price"], errors="coerce")
-    clean["Indexed Raw Material"] = clean["Indexed Raw Material"] / clean["Indexed Raw Material"].iloc[0] * 100
+    clean["Indexed Raw Material"] = (
+        clean["Indexed Raw Material"] / clean["Indexed Raw Material"].iloc[0] * 100
+    )
     figure = go.Figure()
     figure.add_trace(
         go.Scatter(
@@ -9556,7 +10498,9 @@ def render_raw_material_indexed_chart(
         plot_bgcolor="#ffffff",
     )
     st.plotly_chart(figure, use_container_width=True)
-    st.caption("Stock, sector and Nifty overlay can be added once aligned clean cache series are available.")
+    st.caption(
+        "Stock, sector and Nifty overlay can be added once aligned clean cache series are available."
+    )
 
 
 def render_raw_material_tracker(service: RawMaterialImpactService) -> None:
@@ -9568,6 +10512,25 @@ def render_raw_material_tracker(service: RawMaterialImpactService) -> None:
         history = service.store.price_history(material.raw_material_id)
         rows.append(raw_material_tracker_row(material, history))
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.markdown("#### Full commodity catalogue — monthly reference")
+    from app.intelligence.raw_material.catalogue import load_monthly_commodities, monthly_commodity_summary, WORLD_BANK_URL
+    monthly = load_monthly_commodities(PROJECT_ROOT)
+    if monthly.empty:
+        st.info("Click Refresh raw-material prices to load the free World Bank catalogue. Daily Yahoo coverage is limited to the configured feeds above.")
+        return
+    st.caption("World Bank Pink Sheet · monthly USD averages, not live quotes. Kept separate from daily impact calculations; includes rubber and palm oil with their own reported units.")
+    summary = monthly_commodity_summary(monthly)
+    search = st.text_input("Search commodities", key="raw-material-catalogue-search")
+    if search.strip():
+        summary = summary.loc[summary.Commodity.str.contains(search.strip(), case=False, regex=False)]
+    st.dataframe(summary, hide_index=True, use_container_width=True)
+    st.caption(f"{len(summary)} commodities shown · latest period {monthly.Date.max():%Y-%m} · retrieved {monthly['Retrieved At'].iloc[-1]}")
+    st.link_button("Official monthly data source", WORLD_BANK_URL)
+    st.download_button("Download commodity catalogue", summary.to_csv(index=False), "monthly_commodity_catalogue.csv")
+    if not summary.empty:
+        selected = st.selectbox("Commodity history", summary.Commodity.tolist(), key="raw-material-catalogue-chart")
+        history = monthly.loc[monthly.Commodity.eq(selected)].tail(60)
+        st.line_chart(history.set_index("Date")[["Price"]])
 
 
 def render_raw_material_history(service: RawMaterialImpactService) -> None:
@@ -9589,7 +10552,9 @@ def render_raw_material_alerts(service: RawMaterialImpactService) -> None:
         return
     alerts = frame[~frame["Alert Status"].isin(["No Alert"])]
     if alerts.empty:
-        _render_empty_state("No active raw-material alerts", "Current rows are low confidence or insufficient data.")
+        _render_empty_state(
+            "No active raw-material alerts", "Current rows are low confidence or insufficient data."
+        )
     else:
         st.dataframe(alerts, use_container_width=True, hide_index=True)
 
@@ -9602,9 +10567,19 @@ def render_company_material_mapping(service: RawMaterialImpactService) -> None:
     if frame.empty:
         _render_empty_state("No company-material mappings", "Seed templates were not found.")
         return
-    st.caption("Use this table as a controlled mapping workspace. Only mark Verified after filing evidence is added.")
-    st.data_editor(frame, use_container_width=True, hide_index=True, disabled=False, key="raw_material_mapping_editor")
-    st.info("Persistence for edited rows is available through the protected API endpoint with `X-NATIP-Role: admin`.")
+    st.caption(
+        "Use this table as a controlled mapping workspace. Only mark Verified after filing evidence is added."
+    )
+    st.data_editor(
+        frame,
+        use_container_width=True,
+        hide_index=True,
+        disabled=False,
+        key="raw_material_mapping_editor",
+    )
+    st.info(
+        "Persistence for edited rows is available through the protected API endpoint with `X-NATIP-Role: admin`."
+    )
 
 
 def render_raw_material_quality(service: RawMaterialImpactService) -> None:
@@ -9618,16 +10593,27 @@ def render_raw_material_quality(service: RawMaterialImpactService) -> None:
             (watchlist["Stock Symbol"] == mapping.symbol)
             & (watchlist["Raw Material"] == mapping.raw_material_name)
         ]
-        missing = matching["Missing Data"].iloc[0] if not matching.empty else "Impact row unavailable"
-        has_missing = bool(str(missing).strip()) and str(missing).strip().casefold() not in {"none", "nan"}
+        missing = (
+            matching["Missing Data"].iloc[0] if not matching.empty else "Impact row unavailable"
+        )
+        has_missing = bool(str(missing).strip()) and str(missing).strip().casefold() not in {
+            "none",
+            "nan",
+        }
         rows.append(
             {
                 "Symbol": mapping.symbol,
                 "Raw Material": mapping.raw_material_name,
                 "Verification Status": mapping.verification_status.value,
-                "Confidence": mapping.confidence if mapping.confidence is not None else "Data unavailable",
+                "Confidence": (
+                    mapping.confidence if mapping.confidence is not None else "Data unavailable"
+                ),
                 "Missing Data": missing,
-                "Status": "PASS" if mapping.verification_status.value == "Verified" and not has_missing else "REVIEW",
+                "Status": (
+                    "PASS"
+                    if mapping.verification_status.value == "Verified" and not has_missing
+                    else "REVIEW"
+                ),
             }
         )
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
@@ -9645,7 +10631,9 @@ def raw_material_watchlist_frame(service: RawMaterialImpactService) -> pd.DataFr
                 "Sector": row.sector,
                 "Raw Material": row.raw_material_name,
                 "Exposure Type": row.relationship.value,
-                "Current Price": _raw_material_price_display(row.current_price, row.currency, row.unit),
+                "Current Price": _raw_material_price_display(
+                    row.current_price, row.currency, row.unit
+                ),
                 "Currency": row.currency,
                 "Unit": row.unit,
                 "7D Change": _pct_display(row.change_7d),
@@ -9653,7 +10641,9 @@ def raw_material_watchlist_frame(service: RawMaterialImpactService) -> pd.DataFr
                 "90D Change": _pct_display(row.change_90d),
                 "30D INR Move": _pct_display(row.inr_adjusted_change_30d),
                 "20D Volatility": _pct_display(row.volatility_20d),
-                "Trend Regime": _raw_material_trend_label(row.inr_adjusted_change_30d, row.change_90d),
+                "Trend Regime": _raw_material_trend_label(
+                    row.inr_adjusted_change_30d, row.change_90d
+                ),
                 "Volatility Regime": _raw_material_volatility_label(row.volatility_20d),
                 "Margin Pressure": _raw_material_margin_pressure(row),
                 "Impact Severity Score": row.impact_severity_score,
@@ -9779,10 +10769,22 @@ def _raw_material_missing_summary(missing: list[str]) -> str:
 def raw_material_tracker_row(material: Any, history: pd.DataFrame) -> dict[str, Any]:
     """Return one raw-material tracker display row."""
 
-    clean = history.dropna(subset=["price"]) if not history.empty and "price" in history.columns else pd.DataFrame()
+    clean = (
+        history.dropna(subset=["price"])
+        if not history.empty and "price" in history.columns
+        else pd.DataFrame()
+    )
     current_price = None if clean.empty else float(clean["price"].iloc[-1])
-    high_52w = None if clean.empty else float(pd.to_numeric(clean["price"], errors="coerce").tail(252).max())
-    low_52w = None if clean.empty else float(pd.to_numeric(clean["price"], errors="coerce").tail(252).min())
+    high_52w = (
+        None
+        if clean.empty
+        else float(pd.to_numeric(clean["price"], errors="coerce").tail(252).max())
+    )
+    low_52w = (
+        None
+        if clean.empty
+        else float(pd.to_numeric(clean["price"], errors="coerce").tail(252).min())
+    )
     change_20 = pct_change_from_history(clean, 20)
     trend = "Data unavailable"
     if change_20 is not None:
@@ -9791,7 +10793,7 @@ def raw_material_tracker_row(material: Any, history: pd.DataFrame) -> dict[str, 
         "Name": material.name,
         "Category": material.category,
         "Benchmark": material.benchmark,
-        "Current Price": current_price if current_price is not None else "Data unavailable",
+        "Current Price": current_price,
         "Unit": material.unit,
         "Original Currency": material.original_currency,
         "1D Change": _pct_display(pct_change_from_history(clean, 1)),
@@ -9800,14 +10802,18 @@ def raw_material_tracker_row(material: Any, history: pd.DataFrame) -> dict[str, 
         "90D Change": _pct_display(pct_change_from_history(clean, 90)),
         "20D Volatility": _pct_display(_volatility_from_history(clean, 20)),
         "60D Volatility": _pct_display(_volatility_from_history(clean, 60)),
-        "52W High": high_52w if high_52w is not None else "Data unavailable",
-        "52W Low": low_52w if low_52w is not None else "Data unavailable",
+        "52W High": high_52w,
+        "52W Low": low_52w,
         "Trend": trend,
         "Volatility Regime": _raw_material_volatility_label(_volatility_from_history(clean, 20)),
-        "Price Shock Status": "Review" if abs(change_20 or 0) > 0.15 else "Normal",
+        "Price Shock Status": "Unavailable" if change_20 is None else "Review" if abs(change_20) > 0.15 else "Normal",
         "Related Sectors": ", ".join(material.related_sectors),
         "Data Source": material.source,
-        "Freshness": "Fresh" if not clean.empty else "Data unavailable",
+        "Freshness": (
+            "Data unavailable" if clean.empty else
+            ("Stale" if (pd.Timestamp.now(tz="UTC") - pd.to_datetime(clean["timestamp"].iloc[-1], utc=True)).days > 7 else "Recent daily data")
+        ),
+        "Price Date": str(clean["timestamp"].iloc[-1]) if not clean.empty else "Unavailable",
         "Next Scheduled Refresh": "Manual refresh",
     }
 
@@ -9870,6 +10876,7 @@ def _relative_time_display(timestamp: datetime | None) -> str:
 
 
 APP_NAVIGATION = [
+    "Market Strength",
     "Opportunities",
     "Analyse a Stock",
     "Buying Agent",
@@ -9878,6 +10885,7 @@ APP_NAVIGATION = [
     "Stock Probability",
     "Sector Rotation",
     "Raw Material Impact",
+    "Kronos Forecast",
     "Research Lab",
 ]
 
@@ -9888,6 +10896,7 @@ NAVIGATION_ALIASES = {
 }
 
 NAVIGATION_ICONS = {
+    "Market Strength": "📡",
     "Opportunities": "🔎",
     "Analyse a Stock": "📈",
     "Buying Agent": "🎯",
@@ -9896,6 +10905,7 @@ NAVIGATION_ICONS = {
     "Stock Probability": "📊",
     "Sector Rotation": "🧭",
     "Raw Material Impact": "🏭",
+    "Kronos Forecast": "⏱",
     "Research Lab": "🧪",
 }
 
@@ -9903,13 +10913,7 @@ NAVIGATION_ICONS = {
 def _navigation_slug(label: str) -> str:
     """Return URL-safe page slug for top navigation."""
 
-    return (
-        label.casefold()
-        .replace("&", "and")
-        .replace("%", "")
-        .replace("/", "-")
-        .replace(" ", "-")
-    )
+    return label.casefold().replace("&", "and").replace("%", "").replace("/", "-").replace(" ", "-")
 
 
 def _navigation_label_from_slug(slug: str | None) -> str | None:
@@ -9987,7 +10991,9 @@ def render_app_header() -> str:
         )
     with header_cols[2]:
         icon_cols = st.columns(2)
-        if icon_cols[0].button("🔔", key="natip_notifications", help="Notifications", use_container_width=True):
+        if icon_cols[0].button(
+            "🔔", key="natip_notifications", help="Notifications", use_container_width=True
+        ):
             st.toast("No new alerts.")
         if icon_cols[1].button("ST", key="natip_profile", help="Profile", use_container_width=True):
             st.cache_data.clear()
@@ -10013,7 +11019,6 @@ def render_app_header() -> str:
         st.session_state["active_main_tab"] = "Opportunities"
     active = str(st.session_state["active_main_tab"])
     _render_top_navigation(active)
-    st.divider()
     st.markdown("</div>", unsafe_allow_html=True)
     return active
 
@@ -10111,14 +11116,70 @@ def _groww_demo_stocks() -> list[dict[str, Any]]:
     """Return realistic demo stock rows for the Groww-style dashboard."""
 
     return [
-        {"company": "Reliance Industries", "ticker": "RELIANCE.NS", "price": 2864.20, "change": 1.18, "volume": "82.4L", "sector": "Energy"},
-        {"company": "Tata Consultancy", "ticker": "TCS.NS", "price": 4112.75, "change": -0.46, "volume": "21.8L", "sector": "IT"},
-        {"company": "ICICI Bank", "ticker": "ICICIBANK.NS", "price": 1288.30, "change": 0.72, "volume": "1.42Cr", "sector": "Banking"},
-        {"company": "Larsen & Toubro", "ticker": "LT.NS", "price": 3718.45, "change": 1.96, "volume": "18.5L", "sector": "Infrastructure"},
-        {"company": "Bharat Electronics", "ticker": "BEL.NS", "price": 318.80, "change": 3.14, "volume": "2.61Cr", "sector": "Defence"},
-        {"company": "Tata Steel", "ticker": "TATASTEEL.NS", "price": 166.25, "change": -1.28, "volume": "4.35Cr", "sector": "Metals"},
-        {"company": "Sun Pharma", "ticker": "SUNPHARMA.NS", "price": 1792.10, "change": 0.41, "volume": "15.3L", "sector": "Pharma"},
-        {"company": "M&M", "ticker": "M&M.NS", "price": 3268.55, "change": 2.06, "volume": "32.6L", "sector": "Auto"},
+        {
+            "company": "Reliance Industries",
+            "ticker": "RELIANCE.NS",
+            "price": 2864.20,
+            "change": 1.18,
+            "volume": "82.4L",
+            "sector": "Energy",
+        },
+        {
+            "company": "Tata Consultancy",
+            "ticker": "TCS.NS",
+            "price": 4112.75,
+            "change": -0.46,
+            "volume": "21.8L",
+            "sector": "IT",
+        },
+        {
+            "company": "ICICI Bank",
+            "ticker": "ICICIBANK.NS",
+            "price": 1288.30,
+            "change": 0.72,
+            "volume": "1.42Cr",
+            "sector": "Banking",
+        },
+        {
+            "company": "Larsen & Toubro",
+            "ticker": "LT.NS",
+            "price": 3718.45,
+            "change": 1.96,
+            "volume": "18.5L",
+            "sector": "Infrastructure",
+        },
+        {
+            "company": "Bharat Electronics",
+            "ticker": "BEL.NS",
+            "price": 318.80,
+            "change": 3.14,
+            "volume": "2.61Cr",
+            "sector": "Defence",
+        },
+        {
+            "company": "Tata Steel",
+            "ticker": "TATASTEEL.NS",
+            "price": 166.25,
+            "change": -1.28,
+            "volume": "4.35Cr",
+            "sector": "Metals",
+        },
+        {
+            "company": "Sun Pharma",
+            "ticker": "SUNPHARMA.NS",
+            "price": 1792.10,
+            "change": 0.41,
+            "volume": "15.3L",
+            "sector": "Pharma",
+        },
+        {
+            "company": "M&M",
+            "ticker": "M&M.NS",
+            "price": 3268.55,
+            "change": 2.06,
+            "volume": "32.6L",
+            "sector": "Auto",
+        },
     ]
 
 
@@ -10128,15 +11189,13 @@ def _render_groww_market_strip() -> None:
     cards = []
     for item in _groww_demo_indices():
         tone = "groww-positive" if float(item["change"]) >= 0 else "groww-negative"
-        cards.append(
-            f"""
+        cards.append(f"""
             <div class="groww-index-card">
               <div class="groww-muted">{html.escape(item["name"])}</div>
               <div class="groww-price">{html.escape(item["value"])}</div>
               <div class="{tone}">{float(item["change"]):+,.2f} ({float(item["pct"]):+.2f}%)</div>
             </div>
-            """
-        )
+            """)
     st.markdown(f'<div class="groww-index-strip">{"".join(cards)}</div>', unsafe_allow_html=True)
 
 
@@ -10221,8 +11280,12 @@ def _render_groww_top_movers() -> None:
     st.markdown('<div class="groww-card">', unsafe_allow_html=True)
     _render_groww_section_title("Top movers")
     filter_cols = st.columns([1.2, 1.0, 1.0])
-    index_filter = filter_cols[0].selectbox("Index", ["Nifty 50", "Nifty 100", "Nifty 250"], key="groww_movers_index")
-    sort_by = filter_cols[1].selectbox("Sort by", ["Daily Change", "Market Price", "Volume"], key="groww_movers_sort")
+    index_filter = filter_cols[0].selectbox(
+        "Index", ["Nifty 50", "Nifty 100", "Nifty 250"], key="groww_movers_index"
+    )
+    sort_by = filter_cols[1].selectbox(
+        "Sort by", ["Daily Change", "Market Price", "Volume"], key="groww_movers_sort"
+    )
     filter_cols[2].caption(f"Showing {index_filter} demo rows")
 
     frame = pd.DataFrame(_groww_demo_stocks())
@@ -10310,7 +11373,10 @@ def _render_groww_market_news() -> None:
         "IT stocks firm as rupee weakness supports export sentiment.",
     ]
     for item in news:
-        st.markdown(f'<div class="groww-muted" style="padding:7px 0;">{html.escape(item)}</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="groww-muted" style="padding:7px 0;">{html.escape(item)}</div>',
+            unsafe_allow_html=True,
+        )
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -10398,7 +11464,9 @@ def _render_home_opportunities() -> None:
     """Render cached opportunity snapshot."""
 
     st.markdown("### Best Opportunities")
-    st.caption("Only explicit actionable rows are shown here. Research rankings stay in their own tab.")
+    st.caption(
+        "Only explicit actionable rows are shown here. Research rankings stay in their own tab."
+    )
     rows = _load_cached_opportunities()
     actionable_rows = _actionable_opportunity_rows(rows)
     if actionable_rows.empty:
@@ -10482,7 +11550,11 @@ def _render_home_sector_snapshot() -> None:
             "Action",
         ]
         columns = [column for column in desired if column in frame.columns]
-        st.dataframe(frame[columns].head(8) if columns else frame.head(8), use_container_width=True, hide_index=True)
+        st.dataframe(
+            frame[columns].head(8) if columns else frame.head(8),
+            use_container_width=True,
+            hide_index=True,
+        )
     else:
         _render_empty_state(
             "No sector rotation output",
@@ -10499,18 +11571,18 @@ def render_quarterly_results_tab() -> None:
         "history. Scores are research-ranking heuristics, not success probabilities."
     )
     with st.expander("Setup checklist and fallback options", expanded=False):
-        st.markdown(
-            """
+        st.markdown("""
             - Stay logged in to Screener in Chrome before pressing **Update Quarterly Results Data**.
             - If browser access is blocked, use the manual HTML/text import fallback below.
             - Revised filings are preserved; duplicate company rows are collapsed in the visible table.
             - Missing PDF extraction or valuation data lowers confidence instead of inventing values.
-            """
-        )
+            """)
     store = QuarterlyResultsStore(PROJECT_ROOT / "data" / "quarterly_results")
     max_results = 25
     button_cols = st.columns([1.8, 2.2])
-    if button_cols[0].button("Update Quarterly Results Data", type="primary", use_container_width=True):
+    if button_cols[0].button(
+        "Update Quarterly Results Data", type="primary", use_container_width=True
+    ):
         try:
             with st.spinner("Updating latest quarterly results from Screener..."):
                 imported = _update_quarterly_results_data(store=store, max_results=max_results)
@@ -10548,14 +11620,18 @@ def render_quarterly_results_tab() -> None:
             elif pasted_html.strip():
                 html_text = pasted_html
             if not html_text.strip():
-                st.warning("Upload HTML/text or paste copied Screener latest-results page content first.")
+                st.warning(
+                    "Upload HTML/text or paste copied Screener latest-results page content first."
+                )
             else:
                 with st.spinner("Processing imported Screener page data..."):
                     collector = ScreenerQuarterlyResultsCollector(
                         store=store,
                         request_delay_seconds=0.5,
                     )
-                    looks_like_html = "<html" in html_text.casefold() or "<table" in html_text.casefold()
+                    looks_like_html = (
+                        "<html" in html_text.casefold() or "<table" in html_text.casefold()
+                    )
                     if looks_like_html:
                         imported = collector.collect_from_latest_results_html(
                             html_text,
@@ -10576,7 +11652,9 @@ def render_quarterly_results_tab() -> None:
         if snapshot:
             st.progress(snapshot.progress, text=snapshot.message)
             if snapshot.is_running:
-                st.info("Collection is running in the background. Refresh this tab to update progress.")
+                st.info(
+                    "Collection is running in the background. Refresh this tab to update progress."
+                )
             elif snapshot.status == "failed":
                 st.error(snapshot.message)
             else:
@@ -10591,7 +11669,9 @@ def render_quarterly_results_tab() -> None:
                 "Saved quarterly results are older than 6 hours. Click Update Quarterly Results Data."
             )
     else:
-        st.info("No quarterly result records saved yet. Click Update Quarterly Results Data to start.")
+        st.info(
+            "No quarterly result records saved yet. Click Update Quarterly Results Data to start."
+        )
 
     display_records = _latest_quarterly_records_for_display(records)
     _render_quarterly_results_update_proof(display_records or records)
@@ -10601,7 +11681,7 @@ def render_quarterly_results_tab() -> None:
 def _read_screener_latest_from_chrome() -> str:
     """Read visible text from an already logged-in Chrome Screener tab."""
 
-    script = r'''
+    script = r"""
 tell application "Google Chrome"
     repeat with w in windows
         repeat with t in tabs of w
@@ -10613,7 +11693,7 @@ tell application "Google Chrome"
     end repeat
 end tell
 return ""
-'''
+"""
     result = subprocess.run(
         ["osascript", "-e", script],
         check=False,
@@ -10648,7 +11728,8 @@ def _latest_quarterly_records_for_display(
         record
         for record in records
         if record.status not in {"access_blocked", "failed"}
-        and record.company_name not in {
+        and record.company_name
+        not in {
             "Screener latest results",
             "Screener latest results import",
             "Screener latest results text import",
@@ -10673,8 +11754,12 @@ def _render_quarterly_results_update_proof(records: list[QuarterlyResultRecord])
     if not published:
         return
     latest_time = max(record.collection_timestamp for record in published)
-    latest_records = [record for record in published if record.collection_timestamp == latest_time][:4]
-    st.caption(f"Latest saved update: {latest_time.astimezone(IST).strftime('%d %b %Y %H:%M:%S IST')}")
+    latest_records = [record for record in published if record.collection_timestamp == latest_time][
+        :4
+    ]
+    st.caption(
+        f"Latest saved update: {latest_time.astimezone(IST).strftime('%d %b %Y %H:%M:%S IST')}"
+    )
     proof_cols = st.columns(max(1, len(latest_records)))
     for column, record in zip(proof_cols, latest_records, strict=False):
         with column:
@@ -10730,7 +11815,9 @@ def _update_quarterly_results_data(
         if usable:
             return usable
         if records:
-            errors.append(records[0].status_message or f"Direct Screener fetch returned {records[0].status}.")
+            errors.append(
+                records[0].status_message or f"Direct Screener fetch returned {records[0].status}."
+            )
         else:
             errors.append("Direct Screener fetch returned no records.")
     except Exception as exc:
@@ -10751,7 +11838,7 @@ def _update_quarterly_results_data(
 def _copy_screener_latest_from_chrome_ui() -> str:
     """Use Chrome UI automation to copy the logged-in Screener page text."""
 
-    script = r'''
+    script = r"""
 tell application "Google Chrome"
     activate
     repeat with w in windows
@@ -10772,7 +11859,7 @@ tell application "System Events"
     delay 0.15
     keystroke "c" using command down
 end tell
-'''
+"""
     result = subprocess.run(
         ["osascript", "-e", script],
         check=False,
@@ -10899,7 +11986,9 @@ def _render_quarterly_results_filters_and_table(records: list[QuarterlyResultRec
     )
     if selected_key:
         filing_id = selected_key.rsplit("|", maxsplit=1)[-1].strip()
-        selected_record = next((record for record in records if record.filing_id == filing_id), None)
+        selected_record = next(
+            (record for record in records if record.filing_id == filing_id), None
+        )
         if selected_record:
             _render_quarterly_result_detail(selected_record)
 
@@ -10912,8 +12001,12 @@ def _quarterly_result_dashboard_row(record: QuarterlyResultRecord) -> dict[str, 
     row.update(
         {
             "Sales": record.source_values.get("Sales") or record.source_values.get("Revenue") or "",
-            "Operating Profit": record.source_values.get("Operating Profit") or record.source_values.get("EBIDT") or "",
-            "Net Profit": record.source_values.get("Net profit") or record.source_values.get("Net Profit") or "",
+            "Operating Profit": record.source_values.get("Operating Profit")
+            or record.source_values.get("EBIDT")
+            or "",
+            "Net Profit": record.source_values.get("Net profit")
+            or record.source_values.get("Net Profit")
+            or "",
             "EPS": record.source_values.get("EPS") or "",
             "Operating Margin": analysis.operating_margin if analysis else "Pending",
             "Price": record.top_ratios.get("Current Price", ""),
@@ -10968,18 +12061,26 @@ def _render_quarterly_result_detail(record: QuarterlyResultRecord) -> None:
         for item in analysis.improved or ["No clear improvement detected from available evidence."]:
             st.write(f"- {item}")
         st.markdown("#### Why results changed")
-        for item in analysis.result_drivers or ["No management/extracted driver evidence available."]:
+        for item in analysis.result_drivers or [
+            "No management/extracted driver evidence available."
+        ]:
             st.write(f"- {item}")
     with detail_cols[1]:
         st.markdown("#### What weakened")
         for item in analysis.weakened or ["No clear weakening detected from available evidence."]:
             st.write(f"- {item}")
         st.markdown("#### Main risks and unanswered questions")
-        for item in [*analysis.risks, *analysis.unanswered_questions] or ["No major unresolved item captured."]:
+        for item in [*analysis.risks, *analysis.unanswered_questions] or [
+            "No major unresolved item captured."
+        ]:
             st.write(f"- {item}")
 
     st.markdown("#### Earnings quality")
     st.write(analysis.earnings_quality)
+    from app.dashboard.earnings_research_review import render_earnings_research_review
+
+    review_settings = get_settings()
+    render_earnings_research_review(record, api_key=configured_gemini_api_key(review_settings), model=gemini_model(review_settings))
     st.markdown("#### Valuation assessment")
     st.write(analysis.valuation_notes)
     st.markdown("#### Shortlist rationale")
@@ -11023,29 +12124,1730 @@ def render_markets_page(provider: YahooFinanceMarketProvider) -> None:
             ["Price", "Change", "Volume", "52W High/Low", "Freshness", "Source"],
             default=["Price", "Change", "Freshness"],
         )
-    _render_empty_state("Market overview not fully configured", "Use Analyse a Stock for stock charts now.")
+    _render_empty_state(
+        "Market overview not fully configured", "Use Analyse a Stock for stock charts now."
+    )
+
+
+@st.cache_resource(show_spinner=False)
+def _cached_kronos_predictor() -> Any:
+    """Load and retain the lightweight Kronos model for this Streamlit process."""
+
+    return load_kronos_predictor(
+        cache_dir=PROJECT_ROOT / "data" / "models" / "kronos",
+        local_files_only=False,
+    )
+
+
+def render_kronos_forecast_tab() -> None:
+    """Keep single-stock research and the NSE F&O screen inside the Kronos page."""
+    single_tab, screener_tab, sector_tab = st.tabs(
+        ["Single-stock forecast", "F&O screener", "Sector forecast"]
+    )
+    with single_tab:
+        _render_kronos_single_stock_tab()
+    with screener_tab:
+        from app.dashboard.kronos_fno_screener import render_kronos_fno_screener
+
+        render_kronos_fno_screener(
+            PROJECT_ROOT, _cached_kronos_predictor,
+            lambda result, history: _render_kronos_forecast_result(result, history, chart_key="kronos-fno-result-chart"),
+        )
+
+
+    with sector_tab:
+        from app.dashboard.kronos_sector import render_sector_forecast
+
+        render_sector_forecast(
+            PROJECT_ROOT, _cached_kronos_predictor,
+            lambda result, history: _render_kronos_forecast_result(
+                result, history, chart_key="kronos-sector-chart"
+            ),
+        )
+
+
+def _render_kronos_single_stock_tab() -> None:
+    """Render stock-direction research using the attached Kronos model."""
+
+    st.markdown(
+        """
+        <header class="ms-page-header" style="padding-top:0">
+          <div class="ms-eyebrow">NATIP · Candlestick foundation model</div>
+          <h1 class="ms-page-title">Kronos Stock Direction</h1>
+        </header>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Forecast a selected NSE or US stock from adjusted daily OHLCV. This is an experimental "
+        "model path, not a calibrated probability or trading recommendation."
+    )
+
+    market_label = st.selectbox("Market", ["India (NSE)", "US stocks"], key="kronos-market")
+    market = "US" if market_label == "US stocks" else "NSE"
+    universe_name = st.selectbox(
+        "Stock universe", US_UNIVERSE_OPTIONS if market == "US" else UNIVERSE_OPTIONS,
+        key=f"kronos-universe-filter-{market}",
+    )
+    try:
+        with st.spinner("Loading stock universe…"):
+            loader = load_us_universe if market == "US" else load_kronos_universe
+            stock_labels, universe_source = loader(PROJECT_ROOT, universe_name)
+    except ValueError as exc:
+        st.error(str(exc))
+        return
+    st.caption(f"{len(stock_labels):,} stocks · {universe_source}")
+    if universe_name.startswith("IPOs"):
+        st.caption(
+            "Based on NSE listing dates in the last two years; includes listings such as "
+            "demergers as well as IPOs. Forecasting requires at least 120 daily candles."
+        )
+    if not stock_labels:
+        st.info("No stocks available for this universe.")
+        return
+    default_symbol = "AAPL" if market == "US" else str(
+        st.session_state.get("selected_symbol", "RELIANCE")
+    ).removesuffix(".NS")
+    default_index = next(
+        (
+            index
+            for index, label in enumerate(stock_labels)
+            if symbol_from_label(label).removesuffix(".NS") == default_symbol
+        ),
+        0,
+    )
+    controls = st.columns([2.4, 1.0, 1.0, 1.0])
+    selected_label = controls[0].selectbox(
+        "Search company or ticker",
+        stock_labels,
+        index=default_index,
+        key=f"kronos-stock-selector-{universe_name}",
+    )
+    horizon = controls[1].selectbox(
+        "Forecast horizon",
+        [5, 10, 20],
+        index=1,
+        format_func=lambda value: f"{value} sessions",
+        key="kronos-horizon",
+    )
+    lookback = controls[2].selectbox(
+        "History context",
+        [120, 252, 400, 512],
+        index=1,
+        format_func=lambda value: f"{value} bars",
+        key="kronos-lookback",
+    )
+    sample_count = controls[3].selectbox(
+        "Sample paths",
+        [1, 2, 3, 5, 9],
+        index=2,
+        key="kronos-sample-count",
+        help=(
+            "Kronos averages these sampled paths internally; this is not a "
+            "confidence probability. More paths take longer and do not "
+            "guarantee higher forecast accuracy."
+        ),
+    )
+    update_data = st.toggle(
+        "Update adjusted Yahoo history before forecasting",
+        value=True,
+        key="kronos-update-data",
+    )
+
+    custom_symbol = st.text_input(
+        "Other US ticker (optional)" if market == "US" else "Other NSE symbol (optional)",
+        key=f"kronos-custom-symbol-{market}",
+        placeholder="For example: AAPL, MSFT or BRK-B" if market == "US" else
+                    "For example: COFORGE or COFORGE.NS",
+        help="Overrides the dropdown selection. Yahoo Finance must have sufficient daily history.",
+    ).strip()
+    symbol = custom_symbol or symbol_from_label(selected_label)
+    if st.button(
+        f"Forecast {symbol.removesuffix('.NS')} direction",
+        type="primary",
+        use_container_width=True,
+        key="run-kronos-forecast",
+    ):
+        try:
+            with st.spinner(
+                "Loading adjusted history and Kronos weights. First use may download the model…"
+            ):
+                history = load_adjusted_history(
+                    symbol,
+                    cache_dir=PROJECT_ROOT / "data" / "kronos" / "price_cache",
+                    update=update_data,
+                    market=market,
+                )
+                predictor = _cached_kronos_predictor()
+                result = forecast_stock_direction(
+                    history,
+                    symbol=symbol,
+                    predictor=predictor,
+                    horizon=int(horizon),
+                    lookback=int(lookback),
+                    sample_count=int(sample_count),
+                    market=market,
+                )
+                append_forecast_history(
+                    result,
+                    PROJECT_ROOT / "outputs" / "kronos_forecast_history.csv",
+                )
+                st.session_state["kronos_forecast_result"] = result
+                st.session_state["kronos_forecast_history"] = history
+        except KronosForecastError as exc:
+            st.error(str(exc))
+        except Exception as exc:  # pragma: no cover - visible diagnostic for runtime integrations
+            st.exception(exc)
+
+    result = st.session_state.get("kronos_forecast_result")
+    history = st.session_state.get("kronos_forecast_history")
+    if (isinstance(result, KronosForecastResult) and isinstance(history, pd.DataFrame)
+            and result.market == market):
+        _render_kronos_forecast_result(result, history)
+        from app.dashboard.kronos_time_machine import render_daily_time_machine
+
+        render_daily_time_machine(result, history, PROJECT_ROOT)
+        benchmarks = {}
+        nifty = _load_cached_daily_frame("^NSEI") if market == "NSE" else pd.DataFrame()
+        if not nifty.empty:
+            benchmarks["^NSEI"] = nifty
+        sector_index = (sector_index_for_sector(
+            sector_for_symbol(result.symbol.removesuffix(".NS"))
+        ) if market == "NSE" else None)
+        if sector_index and sector_index.yahoo_symbols:
+            sector_symbol = sector_index.yahoo_symbols[0]
+            sector_frame = _load_cached_daily_frame(sector_symbol)
+            if not sector_frame.empty:
+                benchmarks[sector_symbol] = sector_frame
+        settings = get_settings()
+        render_kronos_research_panel(
+            result, history, api_key=configured_gemini_api_key(settings),
+            model=gemini_model(settings), project_root=PROJECT_ROOT,
+            benchmarks=benchmarks,
+        )
+    else:
+        _render_empty_state(
+            "No Kronos forecast yet",
+            "Select a stock and run the model to see its projected 5–20 session path.",
+        )
+
+    with st.expander("Model status and interpretation", expanded=False):
+        model_cache = PROJECT_ROOT / "data" / "models" / "kronos"
+        required_model_refs = (
+            model_cache / "models--NeoQuasar--Kronos-mini" / "refs" / "main",
+            model_cache / "models--NeoQuasar--Kronos-Tokenizer-2k" / "refs" / "main",
+        )
+        weights_present = all(path.is_file() for path in required_model_refs)
+        cache_status = "Yes" if weights_present else "No — first run downloads them"
+        st.write(
+            f"**Weights cached locally:** {cache_status}"
+        )
+        st.write("**Model:** NeoQuasar/Kronos-mini · **Tokenizer:** Kronos-Tokenizer-2k")
+        st.write(
+            "UP/DOWN requires the final predicted close to move beyond a volatility-aware neutral "
+            "band. SIDEWAYS means the sampled path remains inside that band."
+        )
+        st.write(
+            "The model uses price, volume and timestamp structure only. It does not know current "
+            "news, fundamentals, valuation, liquidity or portfolio risk."
+        )
+
+    completed_audits = sorted(
+        (PROJECT_ROOT / "reports" / "kronos").glob("paths_*_context512_*/validation_report.txt"),
+        key=lambda path: path.stat().st_mtime,
+    )
+    if completed_audits:
+        with st.expander("Historical direction test · 512 candles", expanded=False):
+            audit_dir = completed_audits[-1].parent
+            comparison = pd.read_csv(audit_dir / "sample_path_comparison.csv")
+            st.caption(
+                "Matched historical stock/date windows across sample-path settings. "
+                "Repeated seeds measure sampling variation; they are not extra independent cases."
+            )
+            st.dataframe(
+                comparison[["sample_count", "unique_stock_dates", "direction_accuracy_pct",
+                            "sign_accuracy_pct", "return_mae_pp",
+                            "same_direction_across_seeds_pct"]].rename(columns={
+                    "sample_count": "Sample paths", "unique_stock_dates": "Stock/date cases",
+                    "direction_accuracy_pct": "UP/DOWN/SIDEWAYS accuracy %",
+                    "sign_accuracy_pct": "Up/down sign accuracy %",
+                    "return_mae_pp": "Return error (percentage points)",
+                    "same_direction_across_seeds_pct": "Same label across seeds %",
+                }),
+                hide_index=True, use_container_width=True,
+            )
+            st.caption(
+                "Small historical audit; pretrained training-data overlap is unverified. "
+                "These results do not establish a trading edge or a calibrated probability."
+            )
+            st.download_button(
+                "Download forecast vs actual results",
+                (audit_dir / "predictions.csv").read_bytes(),
+                file_name="kronos_forecast_vs_actual.csv", mime="text/csv",
+                key="kronos-validation-download",
+            )
+
+
+def _render_kronos_forecast_result(result: KronosForecastResult, history: pd.DataFrame, *, chart_key: str | None = None) -> None:
+    """Render one Kronos result with chart, metrics, and audit details."""
+
+    direction_color = {"UP": "#13795b", "DOWN": "#c4473a", "SIDEWAYS": "#a17a22"}[result.direction]
+    st.markdown(
+        f"""
+        <div class="natip-card" style="border-left:5px solid {direction_color};padding:18px 20px;">
+          <div class="ms-eyebrow">MODEL DIRECTION · {html.escape(result.symbol)}</div>
+          <div class="ms-forecast-direction" style="color:{direction_color};">
+            {result.direction}
+          </div>
+          <div style="color:#66706a;">Signal date {result.signal_date.date().isoformat()} ·
+          {result.horizon}-session research horizon</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    metrics = st.columns(4)
+    currency = "" if result.market == "INDEX" else ("$" if result.market == "US" else "₹")
+    metrics[0].metric("Latest adjusted close", f"{currency}{result.latest_price:,.2f}")
+    metrics[1].metric("Forecast final move", f"{result.expected_return_pct:+.2f}%")
+    metrics[2].metric("Neutral band", f"±{result.neutral_band_pct:.2f}%")
+    metrics[3].metric("Context", f"{result.lookback} sessions")
+
+    observed = history.loc[history.index <= result.signal_date].tail(result.lookback)
+    st.caption(
+        f"Showing all {len(observed)} historical candles used for this forecast · "
+        f"{observed.index[0].date().isoformat()} to {result.signal_date.date().isoformat()}"
+    )
+    figure = go.Figure()
+    figure.add_trace(
+        go.Candlestick(
+            x=observed.index,
+            open=observed["Open"],
+            high=observed["High"],
+            low=observed["Low"],
+            close=observed["Close"],
+            name="Observed adjusted OHLC",
+            increasing_line_color="#13795b",
+            decreasing_line_color="#c4473a",
+        )
+    )
+    forecast_x = [result.signal_date, *result.forecast.index.tolist()]
+    forecast_close = [result.latest_price, *result.forecast["close"].tolist()]
+    figure.add_trace(
+        go.Scatter(
+            x=forecast_x,
+            y=forecast_close,
+            mode="lines+markers",
+            name="Kronos forecast close",
+            line={"color": "#b58a36", "width": 3, "dash": "dash"},
+            marker={"size": 6},
+        )
+    )
+    figure.add_vline(x=result.signal_date, line_dash="dot", line_color="#66706a")
+    figure.update_layout(
+        height=620,
+        margin={"l": 18, "r": 18, "t": 40, "b": 20},
+        paper_bgcolor="#f7f5ed",
+        plot_bgcolor="#fffdf8",
+        hovermode="x unified",
+        xaxis_rangeslider_visible=True,
+        legend={"orientation": "h", "y": 1.05},
+        yaxis_title=f"Adjusted price ({currency})",
+    )
+    figure.update_xaxes(
+        range=[observed.index[0], result.forecast.index[-1]],
+        rangeslider={"thickness": 0.10},
+    )
+    st.plotly_chart(figure, use_container_width=True, key=chart_key)
+
+    forecast_table = result.forecast.reset_index(names="Date").rename(
+        columns={
+            "open": "Predicted Open",
+            "high": "Predicted High",
+            "low": "Predicted Low",
+            "close": "Predicted Close",
+            "volume": "Predicted Volume",
+        }
+    )
+    forecast_table["Date"] = pd.to_datetime(forecast_table["Date"]).dt.date
+    with st.expander("Forecast path · OHLC details", expanded=False):
+        st.dataframe(
+            forecast_table,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Predicted Open": st.column_config.NumberColumn(format=f"{currency}%.2f"),
+                "Predicted High": st.column_config.NumberColumn(format=f"{currency}%.2f"),
+                "Predicted Low": st.column_config.NumberColumn(format=f"{currency}%.2f"),
+                "Predicted Close": st.column_config.NumberColumn(format=f"{currency}%.2f"),
+                "Predicted Volume": st.column_config.NumberColumn(format="compact"),
+            },
+        )
+    generated_label = result.generated_at.astimezone(IST).strftime("%Y-%m-%d %H:%M IST")
+    st.caption(
+        f"Model {result.model_name} · tokenizer {result.tokenizer_name} · "
+        f"device {result.device} · generated {generated_label}"
+    )
+    with st.expander("Forecast limitations", expanded=False):
+        for warning in result.warnings:
+            st.warning(warning)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _cached_market_strength_snapshot(
+    universe_name: str, *, market: str = "NSE", us_symbols: tuple[str, ...] = (),
+    schema_version: str = "prototype-v3-us"
+) -> MarketStrengthSnapshot:
+    """Build a cached same-date market-strength snapshot from local adjusted data."""
+
+    del schema_version
+    if market == "US":
+        from app.dashboard.market_strength_us import build_us_market_strength
+        return build_us_market_strength(PROJECT_ROOT, us_symbols)
+    universe = load_nifty_universe(universe_name)
+    symbol_map_path = PROJECT_ROOT / "config" / "screener_symbol_map.csv"
+    if symbol_map_path.exists():
+        symbol_map = pd.read_csv(symbol_map_path)
+        required = {"nse_ticker", "company_name", "sector"}
+        if required.issubset(symbol_map.columns):
+            metadata = symbol_map[["nse_ticker", "company_name", "sector"]].rename(
+                columns={
+                    "nse_ticker": "symbol",
+                    "company_name": "mapped_company",
+                    "sector": "mapped_sector",
+                }
+            )
+            metadata["symbol"] = metadata["symbol"].astype(str)
+            universe = universe.merge(metadata, on="symbol", how="left")
+            unknown_company = universe["company"].eq(universe["symbol"].str.removesuffix(".NS"))
+            unknown_sector = universe["sector"].fillna("Unknown").eq("Unknown")
+            universe.loc[unknown_company, "company"] = universe.loc[
+                unknown_company, "mapped_company"
+            ].fillna(universe.loc[unknown_company, "company"])
+            universe.loc[unknown_sector, "sector"] = universe.loc[
+                unknown_sector, "mapped_sector"
+            ].fillna(universe.loc[unknown_sector, "sector"])
+            universe = universe[["symbol", "company", "sector"]]
+    symbols = universe["symbol"].astype(str).tolist() + ["^NSEI"]
+    histories, quality = load_cached_market_histories(
+        symbols,
+        cache_dir=PROJECT_ROOT / "data" / "backtesting" / "cache",
+        legacy_cache_dir=PROJECT_ROOT / "data" / "probability" / "clean_cache_adjusted",
+    )
+    return build_market_strength_snapshot(
+        histories,
+        universe,
+        benchmark_symbol="^NSEI",
+        quality=quality,
+    )
+
+
+def render_market_strength_page() -> None:
+    """Render the integrated NATIP market-strength research workspace."""
+
+    st.markdown(
+        """
+        <header class="ms-page-header" style="padding-top:0">
+          <div class="ms-eyebrow">NATIP · Relative strength research</div>
+          <h1 class="ms-page-title">Market Strength</h1>
+        </header>
+        """,
+        unsafe_allow_html=True,
+    )
+    from app.dashboard.kronos_universe import US_POPULAR
+    from app.dashboard.market_strength_us import update_us_market_strength
+
+    title_cols = st.columns([2.5, 1.2, 1.5])
+    with title_cols[0]:
+        st.caption("End-of-day research workspace · adjusted prices · no live orders")
+    market = title_cols[1].selectbox(
+        "Market", ["India (NSE)", "US stocks"], key="market-strength-market"
+    )
+    us_symbols = tuple(US_POPULAR)
+    universe_name = title_cols[2].selectbox(
+        "Universe",
+        ["Popular US stocks", "Choose US companies"] if market == "US stocks"
+        else ["Nifty 50", "Nifty 100", "Nifty 250"],
+        index=0 if market == "US stocks" else 1,
+        key="market-strength-us-universe" if market == "US stocks" else "market-strength-universe",
+    )
+    if market == "US stocks":
+        if universe_name == "Choose US companies":
+            with st.spinner("Loading US company directory..."):
+                labels, source = load_us_universe(PROJECT_ROOT, "All US stocks")
+            selected = st.multiselect(
+                "US companies", labels,
+                default=[label for label in labels if label.partition(" - ")[0] in US_POPULAR],
+                max_selections=200, key="market-strength-us-companies",
+            )
+            us_symbols = tuple(sorted(label.partition(" - ")[0] for label in selected))
+            st.caption(source)
+        st.caption("US stocks · S&P 500 benchmark · USD. RS ranks and scan counts are relative to the selected companies, not the entire US market.")
+        if len(us_symbols) < 2:
+            st.info("Select at least two US companies.")
+            return
+
+    controls = st.columns([1.2, 1.2, 3.6])
+    if controls[0].button(
+        "Reload cached data", key="market-strength-reload", use_container_width=True
+    ):
+        _cached_market_strength_snapshot.clear()
+        st.rerun()
+    if controls[1].button(
+        "Update latest data", key="market-strength-update", use_container_width=True
+    ):
+        try:
+            universe = load_nifty_universe(universe_name) if market != "US stocks" else None
+            symbols = universe["symbol"].astype(str).tolist() + ["^NSEI"] if universe is not None else list(us_symbols)
+            with st.spinner(
+                f"Incrementally updating {len(symbols)} adjusted price caches. "
+                "This can take several minutes..."
+            ):
+                if market == "US stocks":
+                    progress = st.progress(0.0)
+                    audit = update_us_market_strength(
+                        PROJECT_ROOT, us_symbols,
+                        on_progress=lambda done, total, ticker: progress.progress(done / total, text=f"{done}/{total}: {ticker}"),
+                    )
+                    st.session_state["market-strength-us-update-audit"] = audit
+                else:
+                    YahooDataStore(PROJECT_ROOT / "data" / "backtesting" / "cache").load(
+                        symbols, start="2018-01-01", update=True,
+                    )
+            _cached_market_strength_snapshot.clear()
+            st.success("Market-strength cache updated.")
+            st.rerun()
+        except Exception as exc:
+            st.error("The update did not complete. Existing cache remains available.")
+            st.exception(exc)
+    controls[2].caption(
+        "Ratings use the latest common completed session. Update is incremental and never "
+        "re-downloads valid history unnecessarily."
+    )
+    if market == "US stocks":
+        update_audit = st.session_state.get("market-strength-us-update-audit")
+        if update_audit is not None and not update_audit.empty:
+            failures = update_audit.loc[update_audit["Status"].eq("FAIL")]
+            if not failures.empty:
+                st.warning(f"{len(failures)} US downloads failed; available cached stocks remain usable.")
+                with st.expander("US download issues"):
+                    st.dataframe(failures, hide_index=True)
+
+    try:
+        with st.spinner("Building same-date market breadth and relative-strength ranks..."):
+            snapshot = _cached_market_strength_snapshot(
+                universe_name, market="US" if market == "US stocks" else "NSE",
+                us_symbols=us_symbols if market == "US stocks" else (),
+                schema_version="prototype-v3-us",
+            )
+    except Exception as exc:
+        if market == "US stocks" and isinstance(exc, ValueError):
+            st.info(str(exc))
+            return
+        st.error("Market Strength could not be built from the available adjusted-price cache.")
+        st.exception(exc)
+        return
+
+    regime_class = (
+        "natip-pill-positive"
+        if snapshot.market_regime == "BULLISH PARTICIPATION"
+        else (
+            "natip-pill-negative"
+            if snapshot.market_regime == "BEARISH PARTICIPATION"
+            else "natip-pill-warning"
+        )
+    )
+    st.markdown(
+        f"""
+        <div class="ms-status-strip">
+          <span class="ms-status-item">AS OF <strong>{snapshot.as_of_date.date().isoformat()}</strong></span>
+          <span class="ms-status-item">UNIVERSE <strong>{html.escape(universe_name)}</strong></span>
+          <span class="ms-status-item">ELIGIBLE <strong>{len(snapshot.stocks)}</strong></span>
+          <span class="natip-pill {regime_class}">{html.escape(snapshot.market_regime)}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    latest_expected = pd.Timestamp(datetime.now(IST).date())
+    age_days = int((latest_expected - snapshot.as_of_date.normalize()).days)
+    if age_days > 4:
+        st.warning(
+            f"Cached market-strength data is {age_days} calendar days old. Use Update latest "
+            "data before making a current-session assessment."
+        )
+
+    try:
+        export_market_strength_workspace(
+            snapshot,
+            universe_name=universe_name,
+            output_path=PROJECT_ROOT / "static" / "market-strength" / ("data-us.json" if market == "US stocks" else "data.json"),
+        )
+    except Exception as exc:
+        st.error("The full Market Strength workspace data could not be prepared.")
+        st.exception(exc)
+        return
+
+    workspace_html = build_market_strength_workspace_html(
+        snapshot,
+        universe_name=universe_name,
+        asset_dir=PROJECT_ROOT / "static" / "market-strength",
+    )
+    components.html(
+        workspace_html,
+        height=2050,
+        scrolling=True,
+    )
+    return
+
+    workspace_options = [
+        "Workspace",
+        "Popular Scans",
+        "Sector Rotation",
+        "Stock Screener",
+        "Breakouts",
+        "Charts",
+        "Strategy Backtest",
+        "Trade Journal",
+        "Research Notes",
+    ]
+    if st.session_state.get("market-strength-workspace") not in workspace_options:
+        st.session_state["market-strength-workspace"] = "Workspace"
+    st.markdown('<div class="ms-workspace-label">Market research</div>', unsafe_allow_html=True)
+    workspace = st.radio(
+        "Research workspace",
+        workspace_options,
+        horizontal=True,
+        label_visibility="collapsed",
+        key="market-strength-workspace",
+    )
+    st.caption(
+        f"{len(snapshot.stocks)} stocks ranked · {len(snapshot.sectors)} sectors represented · "
+        "same completed session only"
+    )
+    st.divider()
+    if workspace == "Workspace":
+        _render_market_strength_workspace(snapshot)
+    elif workspace == "Popular Scans":
+        _render_market_strength_scans(snapshot)
+    elif workspace == "Sector Rotation":
+        _render_market_strength_sectors(snapshot)
+    elif workspace == "Stock Screener":
+        _render_market_strength_rankings(snapshot)
+    elif workspace == "Breakouts":
+        _render_market_strength_breakouts(snapshot)
+    elif workspace == "Charts":
+        _render_market_strength_compare(snapshot)
+    elif workspace == "Strategy Backtest":
+        _render_market_strength_backtest()
+    elif workspace == "Trade Journal":
+        _render_market_strength_watchlist(snapshot)
+    else:
+        _render_market_strength_research(snapshot)
+
+    with st.expander("Methodology and data quality", expanded=False):
+        st.markdown("""
+            **NATIP RS Rating:** a 1–99 same-date percentile of an original weighted return
+            composite: 40% three-month, 20% six-month, 20% nine-month and 20% twelve-month
+            adjusted-price return. It is a research ranking, not a probability or recommendation.
+
+            **Stage 2:** close above SMA50, SMA50 above SMA150, SMA150 above SMA200 and a
+            rising SMA200. Breakouts require a close above the previous 20-session high and
+            volume of at least 1.5 times its 20-session average.
+
+            Rankings are based only on stocks with observations on the same completed session.
+            Current-index membership introduces survivorship bias into historical comparisons.
+            """)
+        if not snapshot.quality.empty:
+            st.dataframe(snapshot.quality, use_container_width=True, hide_index=True)
+
+
+def _render_market_strength_workspace(snapshot: MarketStrengthSnapshot) -> None:
+    """Render the prototype-inspired scanner workspace with live Yahoo data."""
+
+    stocks = snapshot.stocks.copy()
+    stage_counts = {
+        "Advancing": int(stocks["Stage"].eq("Stage 2").sum()),
+        "Topping": int(stocks["Stage"].eq("Stage 3").sum()),
+        "Declining": int(stocks["Stage"].eq("Stage 4").sum()),
+        "Basing": int(stocks["Stage"].eq("Stage 1").sum()),
+    }
+    total = max(1, sum(stage_counts.values()))
+    colors = {
+        "Advancing": "#4c7a58",
+        "Topping": "#b3924d",
+        "Declining": "#b35c55",
+        "Basing": "#6689ab",
+    }
+    posture_items = "".join(
+        f'<span><i class="ms-posture-dot" style="background:{colors[label]}"></i>'
+        f"{label} <strong>{count}</strong> {count / total:.0%}</span>"
+        for label, count in stage_counts.items()
+    )
+    posture_bar = "".join(
+        f'<i style="width:{count / total * 100:.2f}%;background:{colors[label]}"></i>'
+        for label, count in stage_counts.items()
+    )
+    st.markdown(
+        f"""
+        <div class="ms-posture-card">
+          <div class="ms-posture-head"><strong>Market posture</strong>{posture_items}</div>
+          <div class="ms-stage-bar">{posture_bar}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    store = MarketResearchStore(PROJECT_ROOT / "data" / "market_strength" / "research.sqlite3")
+    watchlist = {str(row["ticker"]) for row in store.list_watchlist()}
+    quick_view = st.radio(
+        "Quick view",
+        [
+            "All stocks",
+            "Momentum leaders",
+            "Advancing",
+            "Weakening",
+            "Breakout",
+            "Pullback",
+            "Near highs",
+            "Watchlist",
+        ],
+        horizontal=True,
+        key="market-strength-quick-view",
+    )
+    filtered = _market_strength_quick_filter(stocks, quick_view, watchlist)
+
+    left, center, right = st.columns([1.05, 2.35, 1.0], gap="medium")
+    with left:
+        setup_options = [
+            "All",
+            "RS Leaders",
+            "Stage 2 Leaders",
+            "Trend Template Leaders",
+            "Just Entered Stage 2",
+            "RS Line New Highs",
+            "Near 52-Week High",
+            "Near Breakout",
+            "Confirmed Breakout",
+            "Pocket Pivot",
+            "Volume Surge",
+            "Strong in Weak Market",
+            "Laggards",
+        ]
+        setup = st.selectbox("Setup", setup_options, key="market-workspace-setup")
+        sectors = ["All sectors"] + sorted(
+            filtered["Sector"].dropna().astype(str).unique().tolist()
+        )
+        selected_sector = st.selectbox("Sector", sectors, key="market-workspace-sector")
+        if setup != "All":
+            setup_rows = apply_ready_scan(stocks, setup)
+            filtered = filtered[filtered["Ticker"].isin(setup_rows["Ticker"])]
+        if selected_sector != "All sectors":
+            filtered = filtered[filtered["Sector"].eq(selected_sector)]
+        filtered = filtered.sort_values(["RS Rating", "RS Composite"], ascending=False)
+        st.caption(f"{len(filtered)} Yahoo-ranked stocks")
+        if filtered.empty:
+            st.info("No stocks match this setup and sector.")
+            return
+        list_frame = filtered[["Ticker", "Close", "1D Return", "RS Rating"]].copy()
+        list_frame["Change %"] = list_frame.pop("1D Return") * 100.0
+        st.dataframe(
+            list_frame.head(30),
+            use_container_width=True,
+            hide_index=True,
+            height=430,
+            column_config={
+                "Close": st.column_config.NumberColumn(format="₹%.2f"),
+                "Change %": st.column_config.NumberColumn(format="%+.2f%%"),
+                "RS Rating": st.column_config.ProgressColumn(min_value=1, max_value=99),
+            },
+        )
+        csv_data = filtered.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Export current list",
+            data=csv_data,
+            file_name=f"natip_market_strength_{snapshot.as_of_date.date()}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    options = filtered["Ticker"].astype(str).tolist()
+    previous = st.session_state.get("market-workspace-stock")
+    if previous not in options:
+        st.session_state["market-workspace-stock"] = options[0]
+    with center:
+        ticker = st.selectbox(
+            "Inspect stock",
+            options,
+            key="market-workspace-stock",
+        )
+        selected_row = stocks.loc[stocks["Ticker"].eq(ticker)].iloc[0]
+        heading = st.columns([2.0, 1.0, 0.7])
+        heading[0].markdown(
+            f"### {html.escape(str(selected_row['Company']))}\n"
+            f"`{html.escape(ticker)}` · {html.escape(str(selected_row['Sector']))}"
+        )
+        heading[1].metric(
+            "Adjusted close",
+            f"₹{float(selected_row['Close']):,.2f}",
+            f"{float(selected_row['1D Return']):+.2%}",
+        )
+        if heading[2].button("Analyse", key="market-workspace-analyse", use_container_width=True):
+            open_symbol_in_fetch_analysis(ticker)
+        _render_market_strength_chart(snapshot, ticker)
+
+    with right:
+        _render_market_strength_rs_panel(selected_row, len(stocks))
+
+
+def _market_strength_quick_filter(
+    stocks: pd.DataFrame, quick_view: str, watchlist: set[str]
+) -> pd.DataFrame:
+    """Apply one transparent quick-view filter used by the scanner workspace."""
+
+    sma20 = stocks.get("SMA20", stocks["SMA50"])
+    rules = {
+        "All stocks": pd.Series(True, index=stocks.index),
+        "Momentum leaders": stocks["RS Rating"].ge(80),
+        "Advancing": stocks["Stage"].eq("Stage 2"),
+        "Weakening": stocks["RS Change 5D"].le(-5),
+        "Breakout": stocks["Breakout"].fillna(False),
+        "Pullback": stocks["Stage"].eq("Stage 2")
+        & stocks["Close"].le(sma20)
+        & stocks["Close"].gt(stocks["SMA50"]),
+        "Near highs": stocks["Distance 52W High"].ge(-0.05),
+        "Watchlist": stocks["Ticker"].isin(watchlist),
+    }
+    return stocks.loc[rules[quick_view]].copy()
+
+
+def _render_market_strength_rs_panel(row: pd.Series, universe_size: int) -> None:
+    """Render the stock-level relative-strength and trend-template evidence panel."""
+
+    change = float(row["RS Change 20D"]) if pd.notna(row["RS Change 20D"]) else 0.0
+    checks = [
+        ("Price > 150 & 200 DMA", bool(row.get("Price Above Long MAs", False))),
+        ("150 DMA > 200 DMA", bool(row.get("SMA150 Above SMA200", False))),
+        ("200 DMA rising over 20 sessions", bool(row.get("SMA200 Rising", False))),
+        ("50 DMA > 150 & 200 DMA", bool(row.get("SMA50 Above Long MAs", False))),
+        ("Price > 50 DMA", bool(row.get("Price Above SMA50", row["Above SMA50"]))),
+        (
+            "At least 30% above 52-week low",
+            bool(row.get("Above 52W Low Threshold", row["Distance 52W Low"] >= 0.30)),
+        ),
+        (
+            "Within 25% of 52-week high",
+            bool(row.get("Near 52W High Threshold", row["Distance 52W High"] >= -0.25)),
+        ),
+        ("RS rating at least 70", float(row["RS Rating"]) >= 70),
+    ]
+    check_html = "".join(
+        f'<span class="ms-check {"ok" if passed else "no"}">{html.escape(label)}</span>'
+        for label, passed in checks
+    )
+    st.markdown(
+        f"""
+        <div class="ms-rs-panel">
+          <div class="ms-rs-label">Relative strength</div>
+          <div class="ms-rs-value">{float(row['RS Rating']):.0f}</div>
+          <div class="ms-rs-change">{change:+.0f} points over 20 sessions<br>
+          Ranked within {universe_size} eligible stocks</div>
+          <span class="natip-pill">{html.escape(str(row['Stage']))}</span>
+          <div class="ms-rs-label" style="margin-top:16px">Trend template · {sum(passed for _, passed in checks)}/8</div>
+          <div style="margin-top:8px">{check_html}</div>
+          <div style="margin-top:16px"><span class="ms-yahoo-badge">Yahoo Finance · adjusted EOD</span></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_market_strength_pulse(snapshot: MarketStrengthSnapshot) -> None:
+    """Render market regime, participation and leading groups."""
+
+    breadth = snapshot.breadth
+    participation = "broad" if breadth["above_sma50_pct"] >= 55 else "narrow"
+    direction = "expanding" if breadth["advancing_pct"] >= 50 else "contracting"
+    st.markdown(
+        '<div class="ms-section-kicker">Read the market</div>'
+        '<div class="ms-section-title">Participation before stock selection</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"""
+        <div class="ms-reading">
+          <strong>{html.escape(snapshot.market_regime.title())}.</strong>
+          Participation is {participation}: {breadth['above_sma50_pct']:.1f}% of eligible stocks
+          are above SMA50, while daily participation is {direction} with
+          {breadth['advancing_pct']:.1f}% advancing. Treat isolated leaders more selectively
+          when breadth is weak.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    metrics = st.columns(6)
+    metrics[0].metric("Above SMA20", f"{breadth['above_sma20_pct']:.1f}%")
+    metrics[1].metric("Above SMA50", f"{breadth['above_sma50_pct']:.1f}%")
+    metrics[2].metric("Above SMA200", f"{breadth['above_sma200_pct']:.1f}%")
+    metrics[3].metric("Advancing", f"{breadth['advancing_pct']:.1f}%")
+    metrics[4].metric("Stage 2", f"{breadth['stage2_pct']:.1f}%")
+    metrics[5].metric("Near 52W high", f"{breadth['near_high_pct']:.1f}%")
+
+    chart_values = pd.DataFrame(
+        {
+            "Measure": [
+                "Above SMA20",
+                "Above SMA50",
+                "Above SMA200",
+                "Advancing",
+                "Stage 2",
+                "Near 52W high",
+            ],
+            "Percent": [
+                breadth["above_sma20_pct"],
+                breadth["above_sma50_pct"],
+                breadth["above_sma200_pct"],
+                breadth["advancing_pct"],
+                breadth["stage2_pct"],
+                breadth["near_high_pct"],
+            ],
+        }
+    )
+    figure = go.Figure(
+        go.Bar(
+            x=chart_values["Measure"],
+            y=chart_values["Percent"],
+            marker_color=["#0F766E", "#059669", "#16A34A", "#2563EB", "#7C3AED", "#D97706"],
+            text=chart_values["Percent"].map(lambda value: f"{value:.1f}%"),
+            textposition="outside",
+        )
+    )
+    figure.update_layout(
+        title="Market participation",
+        yaxis_title="Stocks (%)",
+        yaxis_range=[0, 105],
+        height=360,
+        margin=dict(l=20, r=20, t=55, b=30),
+        template="plotly_white",
+    )
+    st.plotly_chart(figure, use_container_width=True)
+
+    left, right = st.columns([1.05, 1.45], gap="large")
+    with left:
+        st.markdown("### Leading sectors")
+        st.dataframe(
+            snapshot.sectors[
+                ["Sector Rank", "Sector", "Sector RS", "Breadth50", "Stage 2 %", "Top Stock"]
+            ].head(10),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Sector RS": st.column_config.NumberColumn(format="%.1f"),
+                "Breadth50": st.column_config.NumberColumn(format="%.1f%%"),
+                "Stage 2 %": st.column_config.NumberColumn(format="%.1f%%"),
+            },
+        )
+    with right:
+        st.markdown("### Strongest stocks now")
+        _market_strength_table(snapshot.stocks.head(12))
+
+
+def _render_market_strength_rankings(snapshot: MarketStrengthSnapshot) -> None:
+    """Render searchable cross-sectional RS rankings."""
+
+    st.markdown(
+        '<div class="ms-section-kicker">Rank by strength</div>'
+        '<div class="ms-section-title">Separate leaders from laggards</div>',
+        unsafe_allow_html=True,
+    )
+    controls = st.columns([1.5, 1.2, 1.0, 1.2, 1.2])
+    search = controls[0].text_input(
+        "Search ticker or company", key="market-strength-search", placeholder="RELIANCE or TCS"
+    )
+    sectors = ["All"] + sorted(snapshot.stocks["Sector"].dropna().astype(str).unique().tolist())
+    sector = controls[1].selectbox("Sector", sectors, key="market-strength-sector-filter")
+    minimum_rs = controls[2].slider(
+        "Minimum RS", min_value=1, max_value=99, value=50, key="market-strength-min-rs"
+    )
+    stages = controls[3].multiselect(
+        "Stage",
+        ["Stage 1", "Stage 2", "Stage 3", "Stage 4"],
+        default=[],
+        key="market-strength-stages",
+    )
+    sort_by = controls[4].selectbox(
+        "Sort by",
+        ["RS Rating", "3M Return", "Closest to 52W High", "RS Improvement", "Volume Ratio"],
+        key="market-strength-sort",
+    )
+    filtered = snapshot.stocks[snapshot.stocks["RS Rating"] >= minimum_rs].copy()
+    if search.strip():
+        query = search.strip().casefold()
+        filtered = filtered[
+            filtered["Ticker"].str.casefold().str.contains(query, regex=False)
+            | filtered["Company"].str.casefold().str.contains(query, regex=False)
+        ]
+    if sector != "All":
+        filtered = filtered[filtered["Sector"] == sector]
+    if stages:
+        filtered = filtered[filtered["Stage"].isin(stages)]
+    sort_column = {
+        "RS Rating": "RS Rating",
+        "3M Return": "3M Return",
+        "Closest to 52W High": "Distance 52W High",
+        "RS Improvement": "RS Change 20D",
+        "Volume Ratio": "Volume Ratio",
+    }[sort_by]
+    filtered = filtered.sort_values(sort_column, ascending=False, na_position="last")
+    st.caption(f"{len(filtered)} stocks match the filters.")
+    _market_strength_table(filtered)
+    _render_market_strength_stock_picker(snapshot, filtered, "ranking")
+
+
+def _render_market_strength_breakouts(snapshot: MarketStrengthSnapshot) -> None:
+    """Render a dedicated price-volume breakout workspace."""
+
+    st.markdown(
+        '<div class="ms-section-kicker">Breakout screens</div>'
+        '<div class="ms-section-title">Spot the base before and after it breaks</div>',
+        unsafe_allow_html=True,
+    )
+    candidates = breakout_candidates(snapshot.stocks)
+    metrics = st.columns(4)
+    metrics[0].metric("Confirmed", int(snapshot.stocks["Breakout"].sum()))
+    metrics[1].metric("Near pivot", int(snapshot.stocks["Near Breakout"].sum()))
+    metrics[2].metric("Pocket pivots", int(snapshot.stocks["Pocket Pivot"].sum()))
+    volume_surges = snapshot.stocks["Volume Ratio"].ge(1.5) & snapshot.stocks["1D Return"].gt(0)
+    metrics[3].metric("Volume surges", int(volume_surges.sum()))
+
+    controls = st.columns([1.2, 1.2, 1.2, 1.2])
+    setup = controls[0].selectbox(
+        "Setup",
+        ["All", "Confirmed breakout", "Near breakout", "Pocket pivot", "Volume surge"],
+        key="market-breakout-setup",
+    )
+    minimum_rs = controls[1].slider("Minimum RS", 1, 99, 70, key="market-breakout-min-rs")
+    maximum_distance = controls[2].slider(
+        "Maximum distance below pivot", 0.0, 10.0, 5.0, 0.5, key="market-breakout-distance"
+    )
+    minimum_liquidity = controls[3].number_input(
+        "Minimum traded value (₹ crore)",
+        min_value=0.0,
+        value=5.0,
+        step=5.0,
+        key="market-breakout-liquidity",
+    )
+    filtered = candidates[candidates["RS Rating"].ge(minimum_rs)].copy()
+    filtered = filtered[filtered["Avg Traded Value 20D"].ge(minimum_liquidity * 10_000_000)]
+    filtered = filtered[filtered["Distance to Pivot"].ge(-(maximum_distance / 100.0))]
+    if setup != "All":
+        filtered = filtered[filtered["Setup"].str.contains(setup, case=False, regex=False)]
+
+    if filtered.empty:
+        _render_empty_state(
+            "No breakout candidates match these controls",
+            "Reduce minimum RS, liquidity, or pivot proximity",
+        )
+        return
+    breakout_table = filtered.copy()
+    breakout_table["Pivot Distance %"] = breakout_table["Distance to Pivot"] * 100.0
+    breakout_table["3M %"] = breakout_table["3M Return"] * 100.0
+    visible = [
+        "Rank",
+        "Ticker",
+        "Company",
+        "Sector",
+        "Setup",
+        "RS Rating",
+        "Stage",
+        "Pivot",
+        "Pivot Distance %",
+        "Volume Ratio",
+        "3M %",
+    ]
+    st.dataframe(
+        breakout_table[visible],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "RS Rating": st.column_config.ProgressColumn(min_value=1, max_value=99),
+            "Pivot": st.column_config.NumberColumn(format="₹%.2f"),
+            "Pivot Distance %": st.column_config.NumberColumn(format="%+.2f%%"),
+            "Volume Ratio": st.column_config.NumberColumn(format="%.2fx"),
+            "3M %": st.column_config.NumberColumn(format="%+.2f%%"),
+        },
+    )
+    st.caption(
+        "A resistance touch is not a breakout. Confirmed breakouts require a close above the "
+        "prior 20-session high with volume of at least 1.5x the 20-session average."
+    )
+    _render_market_strength_stock_picker(snapshot, filtered, "breakouts")
+
+
+def _render_market_strength_scans(snapshot: MarketStrengthSnapshot) -> None:
+    """Render transparent one-click stock screens."""
+
+    st.markdown(
+        '<div class="ms-section-kicker">Scan and inspect</div>'
+        '<div class="ms-section-title">Ready-made screens, no setup required</div>',
+        unsafe_allow_html=True,
+    )
+    scan_names = [
+        "RS Leaders",
+        "Stage 2 Leaders",
+        "Trend Template Leaders",
+        "Just Entered Stage 2",
+        "RS Line New Highs",
+        "Near 52-Week High",
+        "Near Breakout",
+        "Confirmed Breakout",
+        "Pocket Pivot",
+        "Volume Surge",
+        "Strong in Weak Market",
+        "Laggards",
+    ]
+    catalog = pd.DataFrame(
+        [
+            {
+                "Scan": name,
+                "Matches": len(apply_ready_scan(snapshot.stocks, name)),
+                "What it finds": _market_strength_scan_description(name),
+            }
+            for name in scan_names
+        ]
+    )
+    st.dataframe(catalog, use_container_width=True, hide_index=True)
+    controls = st.columns([1.5, 1.0, 1.0])
+    scan_name = controls[0].selectbox("Ready scan", scan_names, key="market-strength-scan")
+    minimum_liquidity = controls[1].number_input(
+        "Minimum 20D traded value (₹ crore)",
+        min_value=0.0,
+        value=5.0,
+        step=5.0,
+        key="market-strength-liquidity",
+    )
+    limit = controls[2].selectbox("Maximum rows", [20, 50, 100, 250], index=1)
+    result = apply_ready_scan(snapshot.stocks, scan_name)
+    result = result[result["Avg Traded Value 20D"] >= minimum_liquidity * 10_000_000]
+    result = result.head(limit)
+    st.caption(_market_strength_scan_description(scan_name))
+    if result.empty:
+        _render_empty_state("No stocks match this scan", "Reduce liquidity or choose another scan")
+    else:
+        _market_strength_table(result)
+        _render_market_strength_stock_picker(snapshot, result, "scan")
+    st.divider()
+    st.markdown("### Pattern scanners")
+    st.caption(
+        "NATIP keeps full VCP and DarvaX logic in Opportunities so one setup is not scored by "
+        "two inconsistent engines."
+    )
+    pattern_cols = st.columns(2)
+    if pattern_cols[0].button("Open VCP scanner", use_container_width=True):
+        st.session_state["opportunities-strategy"] = "VCP"
+        st.session_state["requested_main_tab"] = "Opportunities"
+        st.rerun()
+    if pattern_cols[1].button("Open DarvaX scanner", use_container_width=True):
+        st.session_state["opportunities-strategy"] = "DarvaX"
+        st.session_state["requested_main_tab"] = "Opportunities"
+        st.rerun()
+
+
+def _render_market_strength_sectors(snapshot: MarketStrengthSnapshot) -> None:
+    """Render ranked sectors and constituent drill-down."""
+
+    section_cols = st.columns([3.2, 1.0])
+    section_cols[0].markdown(
+        '<div class="ms-section-kicker">From groups to stocks</div>'
+        '<div class="ms-section-title">Sector strength</div>',
+        unsafe_allow_html=True,
+    )
+    if section_cols[1].button("Open rotation map", use_container_width=True):
+        st.session_state["requested_main_tab"] = "Sector Rotation"
+        st.rerun()
+    sector_table = snapshot.sectors.copy()
+    x_center = float(sector_table["3M Return"].median())
+    y_center = float(sector_table["RS Momentum"].median())
+    sector_table["Quadrant"] = np.select(
+        [
+            sector_table["3M Return"].ge(x_center) & sector_table["RS Momentum"].ge(y_center),
+            sector_table["3M Return"].lt(x_center) & sector_table["RS Momentum"].ge(y_center),
+            sector_table["3M Return"].ge(x_center) & sector_table["RS Momentum"].lt(y_center),
+        ],
+        ["Leading", "Improving", "Weakening"],
+        default="Lagging",
+    )
+    rotation_figure = go.Figure()
+    quadrant_colors = {
+        "Leading": "#4c7a58",
+        "Improving": "#6689ab",
+        "Weakening": "#b3924d",
+        "Lagging": "#b35c55",
+    }
+    for quadrant, group in sector_table.groupby("Quadrant"):
+        rotation_figure.add_trace(
+            go.Scatter(
+                x=group["3M Return"] * 100.0,
+                y=group["RS Momentum"],
+                mode="markers+text",
+                text=group["Sector"],
+                textposition="top center",
+                name=str(quadrant),
+                customdata=np.column_stack([group["Sector RS"], group["Breadth50"]]),
+                marker=dict(
+                    color=quadrant_colors[str(quadrant)],
+                    size=np.clip(group["Stocks"] * 2.5, 10, 26),
+                    line=dict(color="white", width=1.5),
+                ),
+                hovertemplate=(
+                    "%{text}<br>3M return: %{x:+.2f}%<br>RS momentum: %{y:+.1f}"
+                    "<br>Sector RS: %{customdata[0]:.1f}<br>Breadth50: %{customdata[1]:.1f}%"
+                    "<extra></extra>"
+                ),
+            )
+        )
+    rotation_figure.add_vline(x=x_center * 100.0, line_color="#ccd3cd", line_dash="dot")
+    rotation_figure.add_hline(y=y_center, line_color="#ccd3cd", line_dash="dot")
+    rotation_figure.update_layout(
+        title="Sector rotation: return × relative-strength momentum",
+        xaxis_title="3M sector return (%)",
+        yaxis_title="20-session RS change",
+        template="plotly_white",
+        height=520,
+        margin=dict(l=20, r=20, t=60, b=35),
+        legend=dict(orientation="h", y=1.08, x=0),
+    )
+    st.plotly_chart(rotation_figure, use_container_width=True)
+    sector_table["1M Return %"] = sector_table.pop("1M Return") * 100.0
+    sector_table["3M Return %"] = sector_table.pop("3M Return") * 100.0
+    st.dataframe(
+        sector_table,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Sector RS": st.column_config.NumberColumn(format="%.1f"),
+            "Median RS": st.column_config.NumberColumn(format="%.1f"),
+            "Breadth50": st.column_config.ProgressColumn(
+                min_value=0, max_value=100, format="%.1f%%"
+            ),
+            "Stage 2 %": st.column_config.NumberColumn(format="%.1f%%"),
+            "1M Return %": st.column_config.NumberColumn(format="%+.2f%%"),
+            "3M Return %": st.column_config.NumberColumn(format="%+.2f%%"),
+            "RS Momentum": st.column_config.NumberColumn(format="%+.1f"),
+        },
+    )
+    selected_sector = st.selectbox(
+        "Inspect sector constituents",
+        snapshot.sectors["Sector"].astype(str).tolist(),
+        key="market-strength-sector-drilldown",
+    )
+    constituents = snapshot.stocks[snapshot.stocks["Sector"] == selected_sector]
+    _market_strength_table(constituents)
+    _render_market_strength_stock_picker(snapshot, constituents, "sector")
+
+
+def _render_market_strength_compare(snapshot: MarketStrengthSnapshot) -> None:
+    """Render normalized stock comparison and selected-stock setup chart."""
+
+    st.markdown(
+        '<div class="ms-section-kicker">Compare the leaders</div>'
+        '<div class="ms-section-title">Relative performance and setup chart</div>',
+        unsafe_allow_html=True,
+    )
+    options = snapshot.stocks["Ticker"].astype(str).tolist()
+    defaults = options[:3]
+    selected = st.multiselect(
+        "Compare up to five stocks",
+        options,
+        default=defaults,
+        max_selections=5,
+        key="market-strength-compare-symbols",
+    )
+    sessions = st.radio(
+        "Comparison window",
+        options=[63, 126, 252],
+        index=1,
+        format_func=lambda value: {63: "3M", 126: "6M", 252: "12M"}[value],
+        key="market-strength-compare-window",
+        horizontal=True,
+    )
+    comparison = normalized_comparison(snapshot.histories, selected, sessions=int(sessions or 126))
+    if comparison.empty:
+        _render_empty_state("No comparison data", "Choose stocks with sufficient cached history")
+    else:
+        figure = go.Figure()
+        for ticker, group in comparison.groupby("Ticker"):
+            figure.add_trace(
+                go.Scatter(x=group["Date"], y=group["Normalized"], name=ticker, mode="lines")
+            )
+        figure.update_layout(
+            title="Normalized performance (start = 100)",
+            height=460,
+            template="plotly_white",
+            hovermode="x unified",
+            margin=dict(l=20, r=20, t=55, b=30),
+        )
+        st.plotly_chart(figure, use_container_width=True)
+    if selected:
+        _render_market_strength_chart(snapshot, selected[0])
+
+
+def _render_market_strength_ask_natip(snapshot: MarketStrengthSnapshot) -> None:
+    """Explain the selected scanner row and hand off to full agent reasoning."""
+
+    st.markdown(
+        '<div class="ms-section-kicker">Explain the scanner</div>'
+        '<div class="ms-section-title">Ask NATIP about a ranked stock</div>',
+        unsafe_allow_html=True,
+    )
+    controls = st.columns([2.4, 1.0])
+    ticker = controls[0].selectbox(
+        "Stock",
+        snapshot.stocks["Ticker"].astype(str).tolist(),
+        key="market-strength-ask-ticker",
+    )
+    row = snapshot.stocks[snapshot.stocks["Ticker"].eq(ticker)].iloc[0]
+    if controls[1].button("Open full agent analysis", use_container_width=True):
+        open_symbol_in_fetch_analysis(ticker)
+
+    positives: list[str] = []
+    cautions: list[str] = []
+    if float(row["RS Rating"]) >= 90:
+        positives.append(f"RS rating {float(row['RS Rating']):.0f}/99 places it among leaders")
+    elif float(row["RS Rating"]) < 50:
+        cautions.append(f"RS rating {float(row['RS Rating']):.0f}/99 is below the median")
+    if row["Stage"] == "Stage 2":
+        positives.append("price and moving-average structure satisfy the Stage 2 trend stack")
+    else:
+        cautions.append(f"current structure is {row['Stage']}, not a confirmed Stage 2 trend")
+    if bool(row["Breakout"]):
+        positives.append(
+            f"breakout is volume-confirmed at {float(row['Volume Ratio']):.2f}x average"
+        )
+    elif bool(row["Near Breakout"]):
+        cautions.append("price is near resistance but has not produced a confirmed breakout")
+    if float(row["RS Change 20D"]) > 10:
+        positives.append(f"RS improved {float(row['RS Change 20D']):.0f} points over 20 sessions")
+    if float(row["Distance 52W High"]) < -0.15:
+        cautions.append(
+            f"price remains {abs(float(row['Distance 52W High'])):.1%} below its 52-week high"
+        )
+
+    summary_cols = st.columns(5)
+    summary_cols[0].metric("RS", f"{float(row['RS Rating']):.0f}/99")
+    summary_cols[1].metric("Stage", str(row["Stage"]))
+    summary_cols[2].metric("3M", f"{float(row['3M Return']):+.1%}")
+    summary_cols[3].metric("From high", f"{float(row['Distance 52W High']):+.1%}")
+    summary_cols[4].metric("Volume", f"{float(row['Volume Ratio']):.2f}x")
+    left, right = st.columns(2)
+    with left:
+        st.markdown("#### What supports the rank")
+        for item in positives or ["No strong supporting condition is present in this snapshot."]:
+            st.write(f"- {item}")
+    with right:
+        st.markdown("#### What needs confirmation")
+        for item in cautions or ["No major scanner-level caution was triggered."]:
+            st.write(f"- {item}")
+    st.info(
+        "This explanation uses only the scanner snapshot. Open full agent analysis for "
+        "fundamentals, valuation, filings, sentiment, risk and sourced reasoning."
+    )
+    _render_market_strength_chart(snapshot, ticker)
+
+
+def _render_market_strength_research(snapshot: MarketStrengthSnapshot) -> None:
+    """Render methodology, Yahoo provenance, data quality and scanner explanation."""
+
+    st.markdown(
+        '<div class="ms-section-kicker">Research notes</div>'
+        '<div class="ms-section-title">Understand every rank before using it</div>',
+        unsafe_allow_html=True,
+    )
+    methodology, data_quality, explain = st.tabs(
+        ["Methodology", "Yahoo data quality", "Explain a stock"]
+    )
+    with methodology:
+        st.markdown("""
+            **Relative Strength rating** is a 1–99 same-date percentile across the selected
+            eligible universe. The composite uses adjusted-price returns: 40% three-month,
+            20% six-month, 20% nine-month and 20% twelve-month.
+
+            **Trend template** contains eight backward-looking checks: price above long moving
+            averages, moving-average alignment, rising SMA200, price location within its
+            52-week range and RS of at least 70.
+
+            **Breakout confirmation** requires an adjusted close above the previous 20-session
+            high and current volume of at least 1.5 times the trailing 20-session average.
+            A resistance touch is classified only as near breakout.
+
+            **Sector rotation** compares sector return with the cross-sector median and uses
+            the median 20-session change in constituent RS ratings as momentum. Quadrants are
+            descriptive, not forecasts.
+            """)
+        st.warning(
+            "Current constituent lists introduce survivorship bias into historical research. "
+            "RS ratings and scans are research evidence, not return probabilities or orders."
+        )
+    with data_quality:
+        st.markdown(
+            f"**Source:** Yahoo Finance through NATIP's incremental `yfinance` cache  \n"
+            f"**Price basis:** corporate-action-adjusted OHLC; reported volume unchanged  \n"
+            f"**Common session:** {snapshot.as_of_date.date().isoformat()}  \n"
+            f"**Eligible histories:** {len(snapshot.stocks)}"
+        )
+        if snapshot.quality.empty:
+            st.info("No per-symbol cache audit was attached to this snapshot.")
+        else:
+            status_counts = snapshot.quality["Status"].value_counts().to_dict()
+            cols = st.columns(3)
+            cols[0].metric("PASS", int(status_counts.get("PASS", 0)))
+            cols[1].metric("REVIEW", int(status_counts.get("REVIEW", 0)))
+            cols[2].metric("FAIL", int(status_counts.get("FAIL", 0)))
+            st.dataframe(snapshot.quality, use_container_width=True, hide_index=True)
+    with explain:
+        _render_market_strength_ask_natip(snapshot)
+
+
+def _render_market_strength_watchlist(snapshot: MarketStrengthSnapshot) -> None:
+    """Render persistent watchlist, current alerts and research journal."""
+
+    st.markdown(
+        '<div class="ms-section-kicker">Track and review</div>'
+        '<div class="ms-section-title">Watchlist, alerts and research journal</div>',
+        unsafe_allow_html=True,
+    )
+    store = MarketResearchStore(PROJECT_ROOT / "data" / "market_strength" / "research.sqlite3")
+    add_cols = st.columns([1.2, 1.8, 1.2, 0.8])
+    ticker = add_cols[0].selectbox(
+        "Ticker", snapshot.stocks["Ticker"].tolist(), key="market-watch-ticker"
+    )
+    note = add_cols[1].text_input("Watch note", key="market-watch-note")
+    tags = add_cols[2].text_input("Tags", placeholder="breakout, leader", key="market-watch-tags")
+    if add_cols[3].button("Add / update", use_container_width=True):
+        store.upsert_watchlist(ticker, note=note, tags=tags)
+        st.success(f"Saved {ticker} to the local watchlist.")
+        st.rerun()
+
+    watch_rows = store.list_watchlist()
+    watchlist = {str(row["ticker"]) for row in watch_rows}
+    if not watch_rows:
+        _render_empty_state("Watchlist is empty", "Add a ranked or scanned stock above")
+    else:
+        st.dataframe(pd.DataFrame(watch_rows), use_container_width=True, hide_index=True)
+        remove = st.selectbox("Remove ticker", sorted(watchlist), key="market-watch-remove")
+        if st.button("Remove from watchlist"):
+            store.remove_watchlist(remove)
+            st.rerun()
+    st.markdown("### Current watchlist alerts")
+    alerts = market_strength_alerts(snapshot.stocks, watchlist)
+    if alerts.empty:
+        st.info("No active RS, breakout, volume or deterioration alerts for watched stocks.")
+    else:
+        st.dataframe(alerts, use_container_width=True, hide_index=True)
+
+    with st.expander("Research journal", expanded=False):
+        journal_cols = st.columns([1, 1])
+        journal_ticker = journal_cols[0].selectbox(
+            "Journal ticker", snapshot.stocks["Ticker"].tolist(), key="journal-ticker"
+        )
+        horizon = journal_cols[1].selectbox(
+            "Horizon", ["5–20 trading days", "1–3 months", "Investment"], key="journal-horizon"
+        )
+        thesis = st.text_area("Research thesis", key="journal-thesis")
+        invalidation = st.text_area(
+            "Invalidation / what would prove this wrong", key="journal-invalid"
+        )
+        if st.button("Save research note"):
+            if not thesis.strip() or not invalidation.strip():
+                st.warning("Add both a thesis and an invalidation condition.")
+            else:
+                row = snapshot.stocks[snapshot.stocks["Ticker"] == journal_ticker].iloc[0]
+                context = json.dumps(
+                    {
+                        "as_of": snapshot.as_of_date.date().isoformat(),
+                        "rs_rating": float(row["RS Rating"]),
+                        "stage": row["Stage"],
+                        "sector": row["Sector"],
+                        "market_regime": snapshot.market_regime,
+                    },
+                    default=str,
+                )
+                store.append_journal(
+                    ticker=journal_ticker,
+                    thesis=thesis,
+                    invalidation=invalidation,
+                    horizon=horizon,
+                    context=context,
+                )
+                st.success("Research note saved.")
+                st.rerun()
+        journal = store.list_journal(limit=50)
+        if journal:
+            st.dataframe(pd.DataFrame(journal), use_container_width=True, hide_index=True)
+
+
+def _render_market_strength_backtest() -> None:
+    """Render the latest existing NATIP backtest evidence without rerunning it."""
+
+    st.markdown(
+        '<div class="ms-section-kicker">Test before trust</div>'
+        '<div class="ms-section-title">Point-in-time backtest evidence</div>',
+        unsafe_allow_html=True,
+    )
+    report_root = PROJECT_ROOT / "reports" / "backtesting"
+    candidates = (
+        sorted(report_root.glob("*_strategy_*"), reverse=True) if report_root.exists() else []
+    )
+    candidates = [path for path in candidates if (path / "metrics.json").exists()]
+    if not candidates:
+        _render_empty_state(
+            "No completed strategy backtest found",
+            "Run the NATIP backtesting CLI to create point-in-time evidence",
+        )
+        return
+    selected = st.selectbox(
+        "Completed run",
+        candidates,
+        format_func=lambda path: path.name,
+        key="market-strength-backtest-run",
+    )
+    metrics = json.loads((selected / "metrics.json").read_text(encoding="utf-8"))
+    metric_cols = st.columns(6)
+    metric_cols[0].metric("CAGR", f"{float(metrics.get('cagr', 0)):.2%}")
+    metric_cols[1].metric("Sharpe", f"{float(metrics.get('sharpe', 0)):.2f}")
+    metric_cols[2].metric("Max drawdown", f"{float(metrics.get('max_drawdown', 0)):.2%}")
+    metric_cols[3].metric("Win rate", f"{float(metrics.get('win_rate', 0)):.2%}")
+    metric_cols[4].metric("Trades", str(metrics.get("trades", 0)))
+    metric_cols[5].metric("Cost drag", f"{float(metrics.get('net_cost_drag', 0)):.2%}")
+    st.warning(
+        "Backtests are historical research. Inspect random baselines, sensitivity and data "
+        "limitations before treating an apparent edge as credible."
+    )
+    stock_summary = selected / "stock_performance_summary.csv"
+    if stock_summary.exists():
+        attribution = pd.read_csv(stock_summary)
+        st.markdown("### Stock attribution")
+        st.dataframe(attribution.head(25), use_container_width=True, hide_index=True)
+    report_path = selected / "summary_report.html"
+    if report_path.exists():
+        st.download_button(
+            "Download complete HTML report",
+            data=report_path.read_bytes(),
+            file_name=report_path.name,
+            mime="text/html",
+        )
+
+
+def _market_strength_table(frame: pd.DataFrame) -> None:
+    """Render the compact stock ranking table."""
+
+    if frame.empty:
+        st.info("No stocks to display.")
+        return
+    visible_frame = frame.copy()
+    visible_frame["3M %"] = visible_frame.get("3M Return", np.nan) * 100.0
+    visible_frame["6M %"] = visible_frame.get("6M Return", np.nan) * 100.0
+    visible_frame["From 52W High %"] = visible_frame.get("Distance 52W High", np.nan) * 100.0
+    columns = [
+        "Rank",
+        "Ticker",
+        "Company",
+        "Sector",
+        "RS Rating",
+        "RS Change 5D",
+        "Stage",
+        "3M %",
+        "6M %",
+        "From 52W High %",
+        "Volume Ratio",
+        "Near Breakout",
+        "Breakout",
+        "Data Status",
+    ]
+    visible = [column for column in columns if column in visible_frame]
+    st.dataframe(
+        visible_frame[visible],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "RS Rating": st.column_config.ProgressColumn(min_value=1, max_value=99, format="%.0f"),
+            "RS Change 5D": st.column_config.NumberColumn(format="%+.0f"),
+            "3M %": st.column_config.NumberColumn(format="%+.2f%%"),
+            "6M %": st.column_config.NumberColumn(format="%+.2f%%"),
+            "From 52W High %": st.column_config.NumberColumn(format="%+.2f%%"),
+            "Volume Ratio": st.column_config.NumberColumn(format="%.2fx"),
+        },
+    )
+
+
+def _render_market_strength_stock_picker(
+    snapshot: MarketStrengthSnapshot, frame: pd.DataFrame, key_suffix: str
+) -> None:
+    """Render selected-stock chart and handoff to full NATIP analysis."""
+
+    if frame.empty:
+        return
+    picker_cols = st.columns([2.0, 0.9])
+    ticker = picker_cols[0].selectbox(
+        "Inspect a stock",
+        frame["Ticker"].astype(str).tolist(),
+        key=f"market-strength-picker-{key_suffix}",
+    )
+    if picker_cols[1].button(
+        "Open complete analysis",
+        key=f"market-strength-open-analysis-{key_suffix}",
+        use_container_width=True,
+    ):
+        open_symbol_in_fetch_analysis(ticker)
+    _render_market_strength_chart(snapshot, ticker)
+
+
+def _render_market_strength_chart(snapshot: MarketStrengthSnapshot, ticker: str) -> None:
+    """Render price, moving averages and volume for one ranked stock."""
+
+    history = snapshot.histories.get(ticker, pd.DataFrame()).tail(260).copy()
+    if history.empty:
+        st.info(f"No cached chart data for {ticker}.")
+        return
+    history["SMA20"] = history["Close"].rolling(20).mean()
+    history["SMA50"] = history["Close"].rolling(50).mean()
+    history["SMA200"] = history["Close"].rolling(200).mean()
+    history["VolumeMA20"] = history["Volume"].rolling(20).mean()
+    figure = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        row_heights=[0.72, 0.28],
+        vertical_spacing=0.04,
+    )
+    figure.add_trace(
+        go.Candlestick(
+            x=history["Date"],
+            open=history["Open"],
+            high=history["High"],
+            low=history["Low"],
+            close=history["Close"],
+            name=ticker,
+            increasing_line_color="#059669",
+            decreasing_line_color="#DC2626",
+        ),
+        row=1,
+        col=1,
+    )
+    for name, color in [("SMA20", "#2563EB"), ("SMA50", "#D97706"), ("SMA200", "#7C3AED")]:
+        figure.add_trace(
+            go.Scatter(x=history["Date"], y=history[name], name=name, line=dict(color=color)),
+            row=1,
+            col=1,
+        )
+    colors = np.where(history["Close"].diff().ge(0), "#6EE7B7", "#FCA5A5")
+    figure.add_trace(
+        go.Bar(x=history["Date"], y=history["Volume"], name="Volume", marker_color=colors),
+        row=2,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=history["Date"],
+            y=history["VolumeMA20"],
+            name="Volume MA20",
+            line=dict(color="#475467", width=1.4),
+        ),
+        row=2,
+        col=1,
+    )
+    stock_row = snapshot.stocks[snapshot.stocks["Ticker"].eq(ticker)]
+    if not stock_row.empty and pd.notna(stock_row.iloc[0]["Pivot"]):
+        pivot = float(stock_row.iloc[0]["Pivot"])
+        figure.add_hline(
+            y=pivot,
+            line_dash="dash",
+            line_color="#B54708",
+            annotation_text=f"20D pivot ₹{pivot:,.2f}",
+            annotation_position="top left",
+            row=1,
+            col=1,
+        )
+    figure.update_layout(
+        title=f"{ticker} setup chart",
+        height=620,
+        template="plotly_white",
+        xaxis_rangeslider_visible=False,
+        margin=dict(l=20, r=20, t=55, b=25),
+        legend=dict(orientation="h", y=1.02, x=0),
+    )
+    st.plotly_chart(figure, use_container_width=True)
+
+
+def _market_strength_scan_description(scan_name: str) -> str:
+    descriptions = {
+        "RS Leaders": "RS rating at or above 90 across the same-date universe.",
+        "Stage 2 Leaders": "Stage 2 trend stack with RS rating at or above 70.",
+        "Trend Template Leaders": (
+            "Close above SMA50/150/200, aligned moving averages and a rising SMA200."
+        ),
+        "Just Entered Stage 2": (
+            "Stage 2 now, but not on the same-universe snapshot five sessions earlier."
+        ),
+        "RS Line New Highs": (
+            "Stock/Nifty relative-strength line at a new trailing 252-session high."
+        ),
+        "Near 52-Week High": "Adjusted close within 5% of its trailing 52-week high.",
+        "Near Breakout": "Price is no more than 3% below the previous 20-session high.",
+        "Confirmed Breakout": (
+            "Close above the prior 20-session high with volume at least 1.5x average."
+        ),
+        "Pocket Pivot": (
+            "Up day above SMA50 with volume exceeding every down-day volume in the prior "
+            "10 sessions."
+        ),
+        "Volume Surge": "Positive day with volume at least 1.5x its 20-session average.",
+        "Strong in Weak Market": (
+            "RS at least 85 and positive one-month return; compare with the regime shown above."
+        ),
+        "Laggards": "RS rating at or below 20 in a Stage 4 downtrend.",
+    }
+    return descriptions[scan_name]
 
 
 def render_opportunities_page() -> None:
-    """Render central opportunity workspace shell."""
+    """Render on-demand VCP and DarvaX opportunity scanners."""
 
     st.subheader("Opportunities")
-    st.caption("Filter, compare and open actionable setups from saved NATIP scans.")
-    st.info(
-        "Primary discovery screen: start here for saved scan output, then open a stock for the reason, "
-        "freshness, risk and next step. If the table is empty, run Buying Agent or Stock Probability first."
+    st.caption(
+        "Choose a chart strategy and universe, then start a scan. Results are shown only "
+        "after you press the scan button."
     )
-    filters = st.columns(5)
-    filters[0].selectbox("Universe", ["Nifty 50", "Nifty 100", "Nifty 250", "Smallcap 250"])
-    filters[1].selectbox("Decision", ["All", "Buy Setup", "Watch", "Wait", "Avoid"])
-    filters[2].selectbox("Confidence", ["All", "High", "Medium", "Low"])
-    filters[3].selectbox("Strategy", ["All", "VCP", "Darvas", "ML BUY", "Options"])
-    filters[4].selectbox("Freshness", ["All", "Fresh", "Stale", "Missing"])
-    rows = _load_cached_opportunities()
-    if rows.empty:
-        _render_empty_state("No opportunity scan available", "Run Buying Agent or Stock Probability.")
+    controls = st.columns([1, 1])
+    strategy = controls[0].selectbox(
+        "Strategy",
+        ["VCP", "DarvaX"],
+        key="opportunities-strategy",
+        help="VCP finds volatility contractions. DarvaX finds active Darvas-style chart patterns.",
+    )
+    universe_name = controls[1].selectbox(
+        "Universe",
+        [
+            "Nifty 50",
+            "Nifty 100",
+            "Nifty Midcap 150",
+            "Nifty Smallcap 250",
+            "Nifty Microcap 250",
+        ],
+        key="opportunities-universe",
+    )
+    universe, _ = _selected_buying_universe(universe_name)
+
+    if strategy == "VCP":
+        render_vcp_pattern_scanner(
+            universe_name=universe_name,
+            universe=universe,
+            key_prefix="opportunities",
+        )
     else:
-        st.dataframe(rows.head(50), use_container_width=True, hide_index=True)
+        render_darvax_pattern_scanner(
+            universe_name=universe_name,
+            universe=universe,
+            key_prefix="opportunities",
+        )
 
 
 def render_placeholder_product_page(title: str, detail: str) -> None:
@@ -11065,9 +13867,21 @@ def render_system_health_page() -> None:
     st.subheader("System Health")
     rows = [
         {"Component": "Streamlit", "Status": "Healthy", "Detail": "Application shell loaded."},
-        {"Component": "Yahoo Finance", "Status": "Partial", "Detail": "Depends on network/provider availability."},
-        {"Component": "Frozen ML models", "Status": "Configured" if FROZEN_ARTIFACT_PATH.exists() else "Missing", "Detail": str(FROZEN_ARTIFACT_PATH)},
-        {"Component": "Clean cache", "Status": "Configured" if CLEAN_CACHE_DIR.exists() else "Missing", "Detail": str(CLEAN_CACHE_DIR)},
+        {
+            "Component": "Yahoo Finance",
+            "Status": "Partial",
+            "Detail": "Depends on network/provider availability.",
+        },
+        {
+            "Component": "Frozen ML models",
+            "Status": "Configured" if FROZEN_ARTIFACT_PATH.exists() else "Missing",
+            "Detail": str(FROZEN_ARTIFACT_PATH),
+        },
+        {
+            "Component": "Clean cache",
+            "Status": "Configured" if CLEAN_CACHE_DIR.exists() else "Missing",
+            "Detail": str(CLEAN_CACHE_DIR),
+        },
         {"Component": "Execution", "Status": "Disabled", "Detail": "No live orders are sent."},
     ]
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
@@ -11235,6 +14049,8 @@ if active_tab == "Home":
     render_home_decision_centre()
 elif active_tab == "Markets":
     render_markets_page(provider)
+elif active_tab == "Market Strength":
+    render_market_strength_page()
 elif active_tab == "Opportunities":
     render_opportunities_page()
 elif active_tab in {"Analyse a Stock", "Fetch Analysis"}:
@@ -11247,6 +14063,8 @@ elif active_tab == "Sector Rotation":
     render_sector_rotation_tab()
 elif active_tab == "Raw Material Impact":
     render_raw_material_impact_tab()
+elif active_tab == "Kronos Forecast":
+    render_kronos_forecast_tab()
 elif active_tab == "Watchlist":
     render_placeholder_product_page(
         "Watchlist",

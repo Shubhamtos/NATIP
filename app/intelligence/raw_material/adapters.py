@@ -56,6 +56,7 @@ class YahooRawMaterialPriceAdapter:
             auto_adjust=True,
             progress=False,
             threads=False,
+            timeout=20,
         )
         return price_points_from_frame(frame, material=material, source=self.source_name)
 

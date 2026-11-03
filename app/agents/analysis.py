@@ -112,7 +112,8 @@ class SignalAgent(BaseAgent):
             data_quality=data_quality,
             reason_codes=reason_codes or [],
             evidence_ids=evidence_ids or [],
-            recommended_action=recommended_action or _recommended_action(bounded_score, data_quality.status),
+            recommended_action=recommended_action
+            or _recommended_action(bounded_score, data_quality.status),
         )
         return AgentSignal(
             agent_name=self.name,
@@ -148,33 +149,65 @@ class MacroConditionsAgent(SignalAgent):
 
         profile = dict(context.payload.get("profile", {}))
         macro_context = list(context.payload.get("macro_context", []))
+        sector_rotation = dict(context.payload.get("sector_rotation", {}))
         beta = _as_float(profile.get("beta"))
         score = -0.15 if beta is not None and beta > 1.4 else 0.0
         reasons = _macro_reasons(macro_context)
+        for item in macro_context:
+            label = str(item.get("label") or "").casefold()
+            change = _as_float(item.get("change_percent"))
+            if change is None:
+                continue
+            if "usd/inr" in label:
+                score += max(-0.15, min(0.15, -change * 4.0))
+            elif "brent" in label:
+                score += max(-0.15, min(0.15, -change * 2.5))
+            elif "india vix" in label:
+                score += max(-0.2, min(0.1, -change * 2.0))
+                value = _as_float(item.get("value"))
+                if value is not None and value >= 20:
+                    score -= 0.15
+            elif "nifty 50" in label:
+                score += max(-0.15, min(0.15, change * 3.0))
+            elif "us 10y" in label:
+                score += max(-0.1, min(0.05, -change))
+        market_regime = str(sector_rotation.get("market_regime") or "UNKNOWN").upper()
+        if market_regime == "RISK_ON":
+            score += 0.15
+            reasons.append("Stored sector-rotation market regime is RISK_ON.")
+        elif market_regime == "RISK_OFF":
+            score -= 0.2
+            reasons.append("Stored sector-rotation market regime is RISK_OFF.")
         if beta is not None:
             reasons.append(f"Beta is {beta:.2f}.")
+        missing_fields = [] if macro_context else ["macro_context"]
+        if market_regime == "UNKNOWN":
+            missing_fields.append("market_regime")
         signal = self._signal(
             context=context,
             score=score,
-            confidence=0.45 if macro_context else (0.35 if beta is not None else 0.2),
+            confidence=0.65 if macro_context and market_regime != "UNKNOWN" else 0.45,
             summary=(
-                "Macro context uses free Yahoo USD/INR and Brent proxies."
+                "Macro context uses free Yahoo cross-asset proxies with "
+                f"{market_regime} market regime."
                 if macro_context
                 else "Macro context is treated cautiously without live macro feeds."
             ),
             reasons=reasons
             or ["Beta is used as a market-sensitivity proxy until macro feeds are connected."],
             counter_evidence=[
-                "RBI policy rate, CPI/WPI, bond yields, India VIX and FII/DII flows are not fully connected."
+                "RBI policy rate, CPI/WPI, bond yields, India VIX and FII/DII flows "
+                "are not fully connected."
             ],
             cross_agent_dependencies=[
                 "Macro regime should size or gate technical breakouts and sector rotation signals.",
-                "High beta stocks require confirmation from Risk Management in risk-off conditions.",
+                "High beta stocks require confirmation from Risk Management in "
+                "risk-off conditions.",
             ],
             invalidation_triggers=[
                 "Sharp INR weakness, crude spike, India VIX shock, or broad-market breakdown.",
             ],
-            missing_fields=[] if macro_context else ["macro_context"],
+            missing_fields=missing_fields,
             reason_codes=["MACRO_PROXY_ONLY"] if macro_context else ["MACRO_INSUFFICIENT_FEEDS"],
         )
         return self._result(signal)
@@ -201,36 +234,58 @@ class SectorOutlookAgent(SignalAgent):
         """
 
         sector = str(context.payload.get("sector", "Unknown"))
-        sector_scores = {
-            "Information Technology": 0.1,
-            "Financial Services": 0.05,
-            "Healthcare": 0.08,
-            "Consumer Goods": 0.05,
-            "Energy": 0.0,
-            "Automobile": 0.02,
-            "Metals": -0.03,
-        }
-        score = sector_scores.get(sector, 0.0)
+        rotation = dict(context.payload.get("sector_rotation", {}))
+        rotation_score = _as_float(rotation.get("rotation_score"))
+        leadership_score = _as_float(rotation.get("leadership_score"))
+        state = str(rotation.get("state") or "UNKNOWN")
+        reasons: list[str] = []
+        if rotation_score is not None and leadership_score is not None:
+            score = ((rotation_score * 0.55 + leadership_score * 0.45) - 50.0) / 50.0
+            reasons.extend(
+                [
+                    f"Rotation score is {rotation_score:.1f}/100.",
+                    f"Leadership score is {leadership_score:.1f}/100.",
+                    (
+                        "Sector ranks are "
+                        f"{rotation.get('rank_20d_ago')}→{rotation.get('rank_10d_ago')}→"
+                        f"{rotation.get('rank_5d_ago')}→{rotation.get('rank_current')}."
+                    ),
+                    f"Sector state is {state}.",
+                ]
+            )
+            breadth = _as_float(rotation.get("breadth50"))
+            if breadth is not None:
+                reasons.append(f"SMA50 breadth is {breadth:.1f}%.")
+            confidence = 0.8 if rotation.get("freshness") == "FRESH" else 0.6
+            missing_fields = list(rotation.get("missing_data") or [])
+            reason_codes = ["SECTOR_ROTATION_CONTEXT"]
+        else:
+            score = 0.0
+            confidence = 0.15
+            reasons.append("Live point-in-time sector rotation context is unavailable.")
+            missing_fields = ["live_sector_rotation_context"]
+            reason_codes = ["SECTOR_CONTEXT_MISSING"]
         signal = self._signal(
             context=context,
             score=score,
-            confidence=0.35 if sector != "Unknown" else 0.15,
-            summary=f"Sector context for {sector}.",
-            reasons=[
-                "Sector score is a conservative static prior until sector feeds are connected."
-            ],
+            confidence=confidence,
+            summary=f"Sector context for {sector}: {state}.",
+            reasons=reasons,
             counter_evidence=[
-                "Constituent breadth, rank history, delivery participation and valuation context may be missing."
+                "Constituent breadth, rank history, delivery participation and valuation "
+                "context may be missing."
             ],
             cross_agent_dependencies=[
                 "Sector signal should confirm stock relative strength and technical setup.",
-                "Avoid counting sector strength twice if technical RS already captures the same move.",
+                "Avoid counting sector strength twice if technical RS already captures "
+                "the same move.",
             ],
             invalidation_triggers=[
-                "Sector rank deterioration, narrowing leadership, or weak breadth below key moving averages.",
+                "Sector rank deterioration, narrowing leadership, or weak breadth below "
+                "key moving averages.",
             ],
-            missing_fields=["sector"] if sector == "Unknown" else ["live_sector_rotation_context"],
-            reason_codes=["SECTOR_STATIC_PRIOR"],
+            missing_fields=missing_fields + (["sector"] if sector == "Unknown" else []),
+            reason_codes=reason_codes,
         )
         return self._result(signal)
 
@@ -287,7 +342,8 @@ class TechnicalAnalysisAgent(SignalAgent):
             counter_evidence=_technical_counter_evidence(quote, bars, darvas_box),
             cross_agent_dependencies=[
                 "Technical setup needs macro/sector confirmation before position sizing.",
-                "RSI, MACD and moving averages are treated as correlated trend evidence, not independent votes.",
+                "RSI, MACD and moving averages are treated as correlated trend evidence, "
+                "not independent votes.",
             ],
             invalidation_triggers=_technical_invalidation_triggers(quote, bars, darvas_box),
             missing_fields=[] if len(closes) >= 5 else ["sufficient_historical_bars"],
@@ -317,9 +373,19 @@ class CompanyFundamentalsAgent(SignalAgent):
         """
 
         profile = dict(context.payload.get("profile", {}))
-        profit_margin = _as_float(profile.get("profitMargins"))
-        roe = _as_float(profile.get("returnOnEquity"))
-        debt_to_equity = _as_float(profile.get("debtToEquity"))
+        fundamental_context = dict(context.payload.get("fundamental_context", {}))
+        metrics = dict(fundamental_context.get("metrics", {}))
+        profit_margin = _first_float(metrics, profile, "profitMargins", "operating_margin")
+        roe = _first_float(metrics, profile, "returnOnEquity", "roe", "screener_roe")
+        roce = _first_float(metrics, profile, "roce", "screener_roce")
+        debt_to_equity = _first_float(metrics, profile, "debtToEquity", "debt_to_equity")
+        revenue_growth = _first_float(metrics, profile, "revenueGrowth", "sales_growth_yoy")
+        profit_growth = _first_float(metrics, profile, "earningsGrowth", "profit_growth_yoy")
+        operating_cashflow = _first_float(metrics, profile, "operatingCashflow")
+        if profit_margin is not None and profit_margin > 1:
+            profit_margin /= 100.0
+        if roe is not None and roe > 1:
+            roe /= 100.0
         score = 0.0
         reasons: list[str] = []
         if profit_margin is not None:
@@ -328,29 +394,50 @@ class CompanyFundamentalsAgent(SignalAgent):
         if roe is not None:
             score += 0.25 if roe > 0.15 else -0.1
             reasons.append(f"Return on equity is {_format_percent(roe)}.")
+        if roce is not None:
+            normalized_roce = roce / 100.0 if roce > 1 else roce
+            score += 0.2 if normalized_roce > 0.15 else -0.08
+            reasons.append(f"ROCE is {_format_percent(normalized_roce)}.")
         if debt_to_equity is not None:
             score += -0.2 if debt_to_equity > 150 else 0.1
             reasons.append(f"Debt/equity is {debt_to_equity:.2f}.")
+        if revenue_growth is not None:
+            score += 0.15 if revenue_growth > 0 else -0.12
+            reasons.append(f"Revenue growth is {_format_percent(revenue_growth)}.")
+        if profit_growth is not None:
+            score += 0.15 if profit_growth > 0 else -0.15
+            reasons.append(f"Profit growth is {_format_percent(profit_growth)}.")
+        if operating_cashflow is not None:
+            score += 0.1 if operating_cashflow > 0 else -0.2
+            reasons.append(
+                "Operating cash flow is positive."
+                if operating_cashflow > 0
+                else "Operating cash flow is negative."
+            )
+        missing_fields = list(fundamental_context.get("missing_data") or [])
         signal = self._signal(
             context=context,
             score=score,
-            confidence=0.7 if reasons else 0.2,
-            summary="Fundamental signal from Yahoo Finance company profile.",
+            confidence=min(0.85, 0.25 + len(reasons) * 0.09),
+            summary="Fundamental signal from Yahoo profile and source-linked Screener evidence.",
             reasons=reasons or ["Fundamental profile fields are limited for this symbol."],
             counter_evidence=[
-                "Quarterly, TTM, cash-flow, promoter, pledge and governance history may be incomplete."
+                "Quarterly, TTM, cash-flow, promoter, pledge and governance history may "
+                "be incomplete."
             ],
             cross_agent_dependencies=[
                 "Strong fundamentals do not override bearish technicals or risk vetoes.",
                 "Valuation agent must check whether quality and growth are already priced in.",
             ],
             invalidation_triggers=[
-                "Revenue/profit deceleration, cash-flow divergence, debt stress, pledge increase, or governance event.",
+                "Revenue/profit deceleration, cash-flow divergence, debt stress, pledge "
+                "increase, or governance event.",
             ],
-            missing_fields=_missing_profile_fields(
-                profile, ["profitMargins", "returnOnEquity", "debtToEquity"]
+            missing_fields=missing_fields,
+            stale_fields=(
+                ["fundamental_context"] if fundamental_context.get("freshness") == "STALE" else []
             ),
-            reason_codes=["FUNDAMENTAL_PROFILE_PROXY"],
+            reason_codes=["FUNDAMENTAL_MULTI_SOURCE"],
         )
         return self._result(signal)
 
@@ -376,8 +463,11 @@ class ValuationAgent(SignalAgent):
         """
 
         profile = dict(context.payload.get("profile", {}))
-        pe = _as_float(profile.get("trailingPE"))
-        pb = _as_float(profile.get("priceToBook"))
+        fundamental_context = dict(context.payload.get("fundamental_context", {}))
+        metrics = dict(fundamental_context.get("metrics", {}))
+        pe = _first_float(metrics, profile, "trailingPE", "screener_stock_p_e", "screener_stock_pe")
+        pb = _first_float(metrics, profile, "priceToBook", "screener_price_to_book_value")
+        ev_ebitda = _first_float(metrics, profile, "enterpriseToEbitda")
         score = 0.0
         reasons: list[str] = []
         if pe is not None:
@@ -386,6 +476,9 @@ class ValuationAgent(SignalAgent):
         if pb is not None:
             score += 0.15 if 0 < pb <= 4 else -0.15
             reasons.append(f"Price/book is {pb:.2f}.")
+        if ev_ebitda is not None:
+            score += 0.15 if 0 < ev_ebitda <= 18 else -0.15
+            reasons.append(f"EV/EBITDA is {ev_ebitda:.2f}.")
         signal = self._signal(
             context=context,
             score=score,
@@ -393,16 +486,24 @@ class ValuationAgent(SignalAgent):
             summary="Valuation signal from available Yahoo multiples.",
             reasons=reasons or ["Valuation multiples are unavailable for this symbol."],
             counter_evidence=[
-                "Historical percentile, peer multiples, EV/EBITDA and normalized cyclic earnings are not fully available."
+                "Historical percentile, peer multiples, EV/EBITDA and normalized cyclic "
+                "earnings are not fully available."
             ],
             cross_agent_dependencies=[
-                "Valuation should temper entry timing when technical signal is late or overextended.",
+                "Valuation should temper entry timing when technical signal is late or "
+                "overextended.",
                 "Fundamentals determine whether expensive valuation is justified or unsupported.",
             ],
             invalidation_triggers=[
-                "Earnings downgrade, peer de-rating, margin compression, or price extension beyond fair-value range.",
+                "Earnings downgrade, peer de-rating, margin compression, or price extension "
+                "beyond fair-value range.",
             ],
-            missing_fields=_missing_profile_fields(profile, ["trailingPE", "priceToBook"]),
+            missing_fields=[
+                label
+                for value, label in ((pe, "P/E"), (pb, "P/B"), (ev_ebitda, "EV/EBITDA"))
+                if value is None
+            ]
+            + ["Historical valuation percentile", "Peer valuation table"],
             reason_codes=["VALUATION_SNAPSHOT_ONLY"],
         )
         return self._result(signal)
@@ -447,14 +548,17 @@ class MarketSentimentAgent(SignalAgent):
             summary="Sentiment signal from price action and coverage proxies.",
             reasons=reasons or ["Sentiment proxy data is limited."],
             counter_evidence=[
-                "Exchange filings, transcripts, verified URLs, duplicate-news removal and recency scoring are unavailable."
+                "Exchange filings, transcripts, verified URLs, duplicate-news removal and "
+                "recency scoring are unavailable."
             ],
             cross_agent_dependencies=[
-                "Positive headlines are not bullish if price reaction is negative or already priced in.",
+                "Positive headlines are not bullish if price reaction is negative or already "
+                "priced in.",
                 "Sentiment events must be checked by Risk Management for binary event risk.",
             ],
             invalidation_triggers=[
-                "Confirmed adverse filing, negative price reaction to good news, or rumour without exchange confirmation.",
+                "Confirmed adverse filing, negative price reaction to good news, or rumour "
+                "without exchange confirmation.",
             ],
             missing_fields=["verified_news_feed", "exchange_filings"],
             reason_codes=["SENTIMENT_PRICE_PROXY"],
@@ -506,7 +610,12 @@ class RiskManagementAgent(SignalAgent):
             reasons.append("Risk agent tempers bullish consensus due to risk flags.")
         if bearish_peers >= 4:
             score -= 0.05
-        hard_vetoes = _risk_hard_vetoes(context.payload, quote=context.payload.get("quote"))
+        hard_vetoes = _unique_strings(
+            [
+                *[str(item) for item in context.payload.get("risk_gate_hard_vetoes", [])],
+                *_risk_hard_vetoes(context.payload, quote=context.payload.get("quote")),
+            ]
+        )
         if hard_vetoes:
             score = min(score, -0.75)
             reasons.extend(hard_vetoes)
@@ -514,17 +623,19 @@ class RiskManagementAgent(SignalAgent):
             context=context,
             score=score,
             confidence=0.65 if reasons else 0.35,
-            summary="Risk signal from volatility, beta, and peer-agent context.",
+            summary="Risk signal from eligibility, liquidity, setup, volatility, and peer context.",
             reasons=reasons or ["No major risk flags detected from available data."],
             counter_evidence=[
-                "Bid-ask spread, surveillance lists, F&O ban status and portfolio holdings may be unavailable."
+                "Bid-ask spread, surveillance lists, F&O ban status and portfolio holdings "
+                "may be unavailable."
             ],
             cross_agent_dependencies=[
                 "Risk has veto authority over technical, fundamental and sentiment positives.",
                 "Overextended or failed-breakout technical states should force wait/reject.",
             ],
             invalidation_triggers=[
-                "GSM/ESM/ASM restriction, suspension, F&O ban, failed breakout, low liquidity, or reward-risk below 2.",
+                "GSM/ESM/ASM restriction, suspension, F&O ban, failed breakout, low liquidity, "
+                "or reward-risk below 2.",
             ],
             missing_fields=_risk_missing_fields(context.payload),
             reason_codes=["RISK_HARD_VETO"] if hard_vetoes else ["RISK_PROXY_CHECK"],
@@ -550,6 +661,32 @@ def _as_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _first_float(*sources_and_keys: Any) -> float | None:
+    """Return the first numeric value found across metric dictionaries and keys."""
+
+    dictionaries = [item for item in sources_and_keys if isinstance(item, dict)]
+    keys = [item for item in sources_and_keys if isinstance(item, str)]
+    for key in keys:
+        for source in dictionaries:
+            value = _as_float(source.get(key))
+            if value is not None:
+                return value
+    return None
+
+
+def _unique_strings(values: list[str]) -> list[str]:
+    """Return non-empty strings in first-seen order."""
+
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = str(value).strip()
+        if cleaned and cleaned not in seen:
+            output.append(cleaned)
+            seen.add(cleaned)
+    return output
 
 
 def _percent_change(start: float | int | None, end: float | int | None) -> float:
@@ -694,7 +831,10 @@ def _technical_counter_evidence(
     elif not darvas_box.breakout:
         counter.append("Touching resistance is not treated as a confirmed breakout.")
     extension = _extension_from_recent_high(quote, bars)
-    if extension is not None and extension > DEFAULT_REASONING_POLICY.late_entry_extension_from_pivot:
+    if (
+        extension is not None
+        and extension > DEFAULT_REASONING_POLICY.late_entry_extension_from_pivot
+    ):
         counter.append("Price is more than 3% above recent pivot area, creating late-entry risk.")
     return counter
 
@@ -721,12 +861,17 @@ def _technical_invalidation_triggers(
     return triggers
 
 
-def _technical_reason_codes(quote: MarketQuote, bars: list[HistoricalBar], darvas_box: Any) -> list[str]:
+def _technical_reason_codes(
+    quote: MarketQuote, bars: list[HistoricalBar], darvas_box: Any
+) -> list[str]:
     """Return compact technical reason codes."""
 
     codes = ["TECHNICAL_PRICE_VOLUME"]
     extension = _extension_from_recent_high(quote, bars)
-    if extension is not None and extension > DEFAULT_REASONING_POLICY.late_entry_extension_from_pivot:
+    if (
+        extension is not None
+        and extension > DEFAULT_REASONING_POLICY.late_entry_extension_from_pivot
+    ):
         codes.append("LATE_ENTRY_RISK")
     if darvas_box is not None and darvas_box.breakout:
         codes.append("DARVAS_BREAKOUT")
@@ -750,6 +895,9 @@ def _extension_from_recent_high(quote: MarketQuote, bars: list[HistoricalBar]) -
 def _risk_missing_fields(payload: dict[str, Any]) -> list[str]:
     """Return risk-control fields that are missing from the current payload."""
 
+    analysis_context = dict(payload.get("analysis_context", {}))
+    risk_context = dict(analysis_context.get("risk", {}))
+    context_missing = [str(item) for item in risk_context.get("missing_data", [])]
     expected = [
         "eligible_universe",
         "surveillance_status",
@@ -758,7 +906,9 @@ def _risk_missing_fields(payload: dict[str, Any]) -> list[str]:
         "event_calendar",
         "reward_risk",
     ]
-    return [field for field in expected if field not in payload]
+    return _unique_strings(
+        [*context_missing, *[field for field in expected if payload.get(field) is None]]
+    )
 
 
 def _risk_hard_vetoes(payload: dict[str, Any], quote: Any) -> list[str]:

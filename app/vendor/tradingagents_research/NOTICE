@@ -1,0 +1,5 @@
+Selected research nodes from user-supplied TradingAgents v0.7.1.
+Project: https://github.com/TauricResearch/TradingAgents
+License: Apache License 2.0 (included in LICENSE).
+NATIP modifications: local imports, offline context helpers, evidence-only adapter,
+bounded Gemini calls and non-trading confirmation output. Full upstream graph is not installed.

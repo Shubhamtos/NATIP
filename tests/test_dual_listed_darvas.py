@@ -282,9 +282,10 @@ def test_classify_entry_state_pre_breakout_watch() -> None:
     assert state == DarvasState.PRE_BREAKOUT_WATCH
 
 
-def test_streamlit_dual_darvas_tab_calls_existing_screener_method() -> None:
+def test_streamlit_keeps_dual_darvas_backend_without_exposing_removed_tab() -> None:
     dashboard = Path("app/dashboard/streamlit_app.py").read_text()
 
-    assert "Dual-Listed Darvas Buy" in dashboard
+    assert "Dual-Listed Non-F&O Darvas Buy Screener" in dashboard
+    assert '"Dual-Listed Darvas Buy"' not in dashboard
     assert ".screen_many(" in dashboard
     assert ".screen_universe(" not in dashboard
