@@ -2,7 +2,8 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
-from app.api.main import app, get_runtime
+from app.agentic.schemas import AgentRunRequest, AgentRunResponse, CriticResult
+from app.api.main import app, get_agentic_gateway, get_runtime
 from app.evidence import EvidenceStore
 from app.providers.market import HistoricalBar, HistoricalDataRequest, MarketQuote, MarketStatus
 
@@ -58,6 +59,19 @@ class FakeRuntime:
         )
 
 
+class FakeAgenticGateway:
+    async def run(self, request: AgentRunRequest) -> AgentRunResponse:
+        return AgentRunResponse(
+            status="completed",
+            query=request.query,
+            critic=CriticResult(
+                sufficient=True,
+                reasons=["Fake agentic workflow completed."],
+            ),
+            result={"symbol": request.symbol, "decision": "WATCH"},
+        )
+
+
 def test_health_endpoint_uses_runtime() -> None:
     runtime = FakeRuntime()
     app.dependency_overrides[get_runtime] = lambda: runtime
@@ -86,3 +100,24 @@ def test_quote_endpoint_fetches_and_stores_evidence() -> None:
     assert response.json()["data"]["quote_count"] == 1
     assert evidence_response.status_code == 200
     assert len(evidence_response.json()["data"]) == 1
+
+
+def test_agent_run_endpoint_uses_agentic_gateway() -> None:
+    app.dependency_overrides[get_agentic_gateway] = lambda: FakeAgenticGateway()
+
+    try:
+        response = TestClient(app).post(
+            "/agent/run",
+            json={
+                "query": "Analyze RELIANCE for a positional opportunity",
+                "symbol": "RELIANCE",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["result"]["symbol"] == "RELIANCE"
+    assert payload["result"]["decision"] == "WATCH"
