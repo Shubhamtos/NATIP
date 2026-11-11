@@ -1,0 +1,37 @@
+name: X Financial Astrology Scraper
+
+on:
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: x_finastro_scraper
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scraper
+        env:
+          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
+          X_USERNAME: anandrathi12
+        run: python src/main.py
+
+      - name: Upload output
+        uses: actions/upload-artifact@v4
+        with:
+          name: anandrathi12-financial-astrology
+          path: x_finastro_scraper/output/*
+          if-no-files-found: error
