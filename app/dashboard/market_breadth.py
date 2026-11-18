@@ -14,7 +14,11 @@ from app.dashboard.market_breadth_data import (
     load_breadth_universe,
     update_breadth_data,
 )
-from app.intelligence.market_breadth import CALCULATION_VERSION, build_breadth_report
+from app.intelligence.market_breadth import (
+    CALCULATION_VERSION,
+    BreadthReport,
+    build_breadth_report,
+)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -135,6 +139,19 @@ def render_market_breadth(root: Path) -> None:
             "bars on this date. Missing stocks are not counted as decliners."
         )
     st.markdown(_summary(current))
+    overview, near, crosses = st.tabs(["Market overview", "Near EMA200", "EMA Crossings"])
+    with overview:
+        _render_overview(report, source, universe_name, view)
+    from app.dashboard.ema_screeners import render_ema_crossings, render_near_ema200
+
+    with near:
+        render_near_ema200(report)
+    with crosses:
+        render_ema_crossings(report)
+
+
+def _render_overview(report: BreadthReport, source: str, universe_name: str, view: str) -> None:
+    current = report.timeline.iloc[-1]
     metrics = st.columns(4)
     for col, window in zip(metrics[:3], (20, 50, 200), strict=True):
         col.metric(f"Above SMA{window}", _value(current[f"Above SMA{window} %"]))

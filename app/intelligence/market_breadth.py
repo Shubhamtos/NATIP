@@ -7,7 +7,9 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-CALCULATION_VERSION = "breadth-1.0"
+from app.intelligence.ema_screeners import ema_observations
+
+CALCULATION_VERSION = "breadth-1.1-ema"
 # This demerger lacks a verified demerged-share total-return reconstruction.
 STRUCTURAL_BREAKS = {"VEDL.NS": ("2026-04-30",)}
 
@@ -128,7 +130,7 @@ def build_breadth_report(
     calendar = pd.DatetimeIndex(benchmark.Date, name="Date")
     date = calendar[-1]
     breaks = STRUCTURAL_BREAKS if structural_breaks is None else structural_breaks
-    panels, audits = [], []
+    panels, audits, ema_rows = [], [], []
     for row in metadata.itertuples(index=False):
         symbol, company, sector = row.symbol, row.company, row.sector
         raw = histories.get(symbol)
@@ -179,6 +181,8 @@ def build_breadth_report(
             stock[f"Above SMA{window}"] = (
                 close.gt(average).astype(float).where(close.notna() & average.notna())
             )
+        # Screening needs only the as-of row, not extra EMA columns on the whole panel.
+        ema_rows.append({"Ticker": symbol, **ema_observations(close, segment).iloc[-1].to_dict()})
         lag20 = close.groupby(segment).shift(20)
         complete20 = close.groupby(segment).transform(lambda s: s.rolling(21).count()).eq(21)
         stock["20D Return"] = close.div(lag20).sub(1).where(complete20)
@@ -232,6 +236,7 @@ def build_breadth_report(
         columns={"symbol": "Ticker", "company": "Company", "sector": "Sector"}
     )
     stocks = pd.concat([stocks, absent], ignore_index=True)
+    stocks = stocks.merge(pd.DataFrame(ema_rows), on="Ticker", how="left", validate="one_to_one")
     stocks["Status"] = np.where(stocks.Tradable.eq(True), "PASS", "MISSING / NON-TRADING")
     sectors = (
         sector_timeline.xs(date, level="Date")

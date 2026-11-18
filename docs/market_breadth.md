@@ -3,6 +3,31 @@
 Open **Market Breadth** in NATIP's main navigation, or `/?page=market-breadth`.
 This page is descriptive only: no models, portfolio rules or orders are changed.
 
+## EMA Screeners
+
+Two additional subtabs share the page's universe, as-of date and update controls:
+
+- **Near EMA200**: stocks with absolute `100 * (adjusted_close / EMA200 - 1)` at
+  or below the chosen distance (default 3%). Select above, below or both sides.
+  Matches are ordered by absolute distance, closest first.
+- **EMA Crossings**: select EMA20/50/200, upward/downward/both directions, last
+  1/3/5/10/20 benchmark sessions, and any/all selected periods. Defaults are any
+  selected EMA, upward crosses and the latest session. A price touch is not a cross.
+  An upward cross requires previous close <= previous EMA and current close > current
+  EMA; downward is the reverse. Recent crosses must still hold on the as-of date.
+  All within one session means all selected periods crossed on that same session.
+  For larger windows, each selected EMA may have a different crossing date, shown
+  separately. Both directions may produce two explicitly labelled rows for one stock
+  when it crossed different EMAs in opposite directions.
+
+EMA uses the existing recursive pandas convention (`span`, `adjust=False`) with a
+full-period minimum warm-up. EMA calculation and remembered crossing events restart
+after missing/invalid/non-trading bars and known structural breaks. Only event dates
+are carried forward, never missing prices. New listings without 200 uninterrupted
+valid sessions are ineligible for EMA200, not labelled as failures. These screens
+are not EMA/EMA crossovers, model features, probabilities or trade recommendations.
+Each has sector/search filters and a downloadable matches table.
+
 ## Data and operation
 
 - Universe filters: Nifty 50, 100, LargeMidcap 250 (labelled Nifty 250 in NATIP),
@@ -58,6 +83,8 @@ of individual price moves; inspect denominators and the quality report.
 ## Verification
 
 `venv/bin/python -m pytest tests/test_market_breadth.py -q -p no:cacheprovider`
+
+`venv/bin/python -m pytest tests/test_ema_screeners.py -q -p no:cacheprovider`
 
 Tests use synthetic fixtures, not production output. They cover missing sessions,
 new listings, no forward-fill, bad OHLC, zero volume, adjusted/raw selection, structural
