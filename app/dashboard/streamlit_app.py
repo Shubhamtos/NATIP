@@ -10877,6 +10877,7 @@ def _relative_time_display(timestamp: datetime | None) -> str:
 
 APP_NAVIGATION = [
     "Market Strength",
+    "Market Breadth",
     "Opportunities",
     "Analyse a Stock",
     "Buying Agent",
@@ -10895,6 +10896,7 @@ NAVIGATION_ALIASES = {
 
 NAVIGATION_ICONS = {
     "Market Strength": "📡",
+    "Market Breadth": "▥",
     "Opportunities": "🔎",
     "Analyse a Stock": "📈",
     "Buying Agent": "🎯",
@@ -14044,6 +14046,9 @@ elif active_tab == "Markets":
     render_markets_page(provider)
 elif active_tab == "Market Strength":
     render_market_strength_page()
+elif active_tab == "Market Breadth":
+    from app.dashboard.market_breadth import render_market_breadth
+    render_market_breadth(PROJECT_ROOT)
 elif active_tab == "Opportunities":
     render_opportunities_page()
 elif active_tab in {"Analyse a Stock", "Fetch Analysis"}:
