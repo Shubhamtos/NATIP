@@ -28,6 +28,16 @@ valid sessions are ineligible for EMA200, not labelled as failures. These screen
 are not EMA/EMA crossovers, model features, probabilities or trade recommendations.
 Each has sector/search filters and a downloadable matches table.
 
+### Hosted visibility
+
+The page displays UI build `EMA-1.2`. Both EMA subtabs remain visible even if
+the hosted runtime has no local price cache; **Load prices and run screeners**
+initializes the selected universe. Local caches are not committed to GitHub and
+are not automatically shared with Streamlit Cloud. If an older overview without
+the EMA tabs is still displayed after a GitHub push, reboot the hosted app once
+from **Manage app**. File watching remains disabled to preserve the documented
+bundled-runtime safeguards. Browser refresh is not a server reboot.
+
 ## Data and operation
 
 - Universe filters: Nifty 50, 100, LargeMidcap 250 (labelled Nifty 250 in NATIP),

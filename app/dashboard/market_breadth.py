@@ -20,6 +20,8 @@ from app.intelligence.market_breadth import (
     build_breadth_report,
 )
 
+BREADTH_UI_VERSION = "EMA-1.2"
+
 
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_breadth(root: str, universe_name: str, cutoff: str, version: str = CALCULATION_VERSION):
@@ -71,6 +73,7 @@ def _summary(latest: pd.Series) -> str:
 
 def render_market_breadth(root: Path) -> None:
     st.title("Market Breadth")
+    st.caption(f"EMA screeners · {BREADTH_UI_VERSION}")
     top = st.columns([2, 1, 1])
     universe_name = top[0].selectbox("Universe", UNIVERSES, index=1, key="breadth-universe")
     cutoff = latest_completed_nse_day()
@@ -84,7 +87,11 @@ def render_market_breadth(root: Path) -> None:
         key="breadth-history",
     )
     update, reload = st.columns(2)
-    if update.button("Update breadth data", type="primary", key="breadth-update"):
+    update_requested = st.session_state.pop("breadth-request-update", False)
+    if (
+        update.button("Update breadth data", type="primary", key="breadth-update")
+        or update_requested
+    ):
         try:
             universe, _ = load_breadth_universe(root, universe_name)
             progress = st.progress(0.0)
@@ -110,13 +117,41 @@ def render_market_breadth(root: Path) -> None:
             st.error(f"Update could not complete: {exc}")
     if reload.button("Reload saved data", key="breadth-reload"):
         cached_breadth.clear()
+    status = st.container()
+    overview, near, crosses = st.tabs(["Market overview", "Near EMA200", "EMA Crossings"])
     try:
         with st.spinner("Calculating same-session participation..."):
             report, source = cached_breadth(str(root), universe_name, selected.isoformat())
     except Exception as exc:
-        st.warning(f"Breadth unavailable: {exc}")
-        st.info("Use Update breadth data to populate missing adjusted prices.")
+        with status:
+            st.warning(f"Breadth unavailable: {exc}")
+        for tab, heading, key in (
+            (overview, "Market overview", "overview"),
+            (near, "Stocks near EMA200", "near"),
+            (crosses, "Price crossing EMA20 / EMA50 / EMA200", "crosses"),
+        ):
+            with tab:
+                st.subheader(heading)
+                st.info("Adjusted price data is not available for this universe/date yet.")
+                if st.button("Load prices and run screeners", key=f"breadth-initialize-{key}"):
+                    st.session_state["breadth-request-update"] = True
+                    st.rerun()
         return
+    with status:
+        _render_status(report, universe_name, selected, cutoff)
+    with overview:
+        _render_overview(report, source, universe_name, view)
+    from app.dashboard.ema_screeners import render_ema_crossings, render_near_ema200
+
+    with near:
+        render_near_ema200(report)
+    with crosses:
+        render_ema_crossings(report)
+
+
+def _render_status(
+    report: BreadthReport, universe_name: str, selected, cutoff: pd.Timestamp
+) -> None:
     current = report.timeline.iloc[-1]
     st.caption(
         f"As of {report.as_of.date()} · {universe_name} · "
@@ -139,15 +174,6 @@ def render_market_breadth(root: Path) -> None:
             "bars on this date. Missing stocks are not counted as decliners."
         )
     st.markdown(_summary(current))
-    overview, near, crosses = st.tabs(["Market overview", "Near EMA200", "EMA Crossings"])
-    with overview:
-        _render_overview(report, source, universe_name, view)
-    from app.dashboard.ema_screeners import render_ema_crossings, render_near_ema200
-
-    with near:
-        render_near_ema200(report)
-    with crosses:
-        render_ema_crossings(report)
 
 
 def _render_overview(report: BreadthReport, source: str, universe_name: str, view: str) -> None:

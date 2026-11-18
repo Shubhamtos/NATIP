@@ -211,3 +211,41 @@ def test_ui_filters_downloads_and_chart_controls(tmp_path, monkeypatch):
     app.text_input(key="breadth-search").set_value("not-a-stock").run()
     assert app.dataframe[1].value.empty
     assert not app.exception
+
+
+def test_cloud_without_price_caches_still_shows_ema_tabs_and_initializes(tmp_path, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+
+    initialized = []
+
+    def cached(*args, **kwargs):
+        if not initialized:
+            raise ValueError("No adjusted cache in fresh hosted runtime")
+        return report(), "TEST FIXTURE"
+
+    cached.clear = lambda: None
+
+    def update(root, symbols, **kwargs):
+        initialized.append(tuple(symbols))
+        return pd.DataFrame({"Ticker": symbols, "Status": ["UPDATED"] * len(symbols)})
+
+    monkeypatch.setattr("app.dashboard.market_breadth.cached_breadth", cached)
+    monkeypatch.setattr(
+        "app.dashboard.market_breadth.load_breadth_universe", lambda *a: (data()[1], "TEST")
+    )
+    monkeypatch.setattr("app.dashboard.market_breadth.update_breadth_data", update)
+    app = AppTest.from_string(
+        "from pathlib import Path\n"
+        "from app.dashboard.market_breadth import render_market_breadth\n"
+        f"render_market_breadth(Path({str(tmp_path)!r}))"
+    ).run(timeout=15)
+    assert not app.exception
+    assert [tab.label for tab in app.tabs] == ["Market overview", "Near EMA200", "EMA Crossings"]
+    assert any("EMA-1.2" in item.value for item in app.caption)
+    assert not initialized
+    app.button(key="breadth-initialize-near").click().run(timeout=15)
+    assert not app.exception
+    assert len(initialized) == 1
+    assert "breadth-request-update" not in app.session_state
+    assert len(app.get("plotly_chart")) == 2
+    assert app.number_input(key="near-ema200-distance").value == 3.0
