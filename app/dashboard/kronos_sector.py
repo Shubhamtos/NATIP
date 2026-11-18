@@ -53,9 +53,16 @@ def render_sector_forecast(
     universe = sector_universe()
     st.subheader("Market and sector-index forecast")
     st.caption("Experimental daily index direction, not a sector-stock or options BUY signal.")
+    select_all, clear_all = st.columns(2)
+    if select_all.button("Select all sectors", key="kronos-sector-select-all"):
+        st.session_state["kronos-sector-selection"] = list(universe)
+    if clear_all.button("Clear sector selection", key="kronos-sector-clear-all"):
+        st.session_state["kronos-sector-selection"] = []
     selected = st.multiselect(
-        "Market / sector indices", list(universe), default=["Nifty 50"],
-        key="kronos-sector-selection"
+        "Market / sector indices",
+        list(universe),
+        default=["Nifty 50"],
+        key="kronos-sector-selection",
     )
     cols = st.columns(3)
     horizon = cols[0].selectbox("Sector horizon", [5, 10, 20], key="kronos-sector-horizon")
@@ -122,9 +129,17 @@ def render_sector_forecast(
                 progress.progress(number / len(selected), text=f"{number}/{len(selected)} sectors")
         st.session_state["kronos-sector-results"] = (rows, results)
     saved = st.session_state.get("kronos-sector-results")
-    if not saved:
+    from app.dashboard.kronos_sector_stocks import render_sector_stock_screener
+
+    if saved:
+        _render_index_results(saved, chart_renderer)
+    else:
         st.info("Select sectors and press Forecast selected sectors.")
-        return
+    st.divider()
+    render_sector_stock_screener(root, predictor_factory, chart_renderer, selected)
+
+
+def _render_index_results(saved, chart_renderer):
     rows, results = saved
     frame = pd.DataFrame(rows)
     st.dataframe(frame, hide_index=True, use_container_width=True)

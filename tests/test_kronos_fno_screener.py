@@ -7,6 +7,19 @@ import pandas as pd
 from app.dashboard import kronos_fno_screener as screen
 
 
+def test_sector_metadata_preserves_universe_and_unknowns(tmp_path):
+    config = tmp_path / "config"
+    config.mkdir()
+    pd.DataFrame({"nse_ticker": ["TCS.NS"], "sector": ["Information Technology"]}).to_csv(
+        config / "screener_symbol_map.csv", index=False
+    )
+    universe = pd.DataFrame({"symbol": ["TCS.NS", "ZZUNKNOWN.NS"], "company": ["TCS", "X"]})
+    result = screen.add_sector_metadata(tmp_path, universe)
+    assert result.symbol.tolist() == universe.symbol.tolist()
+    assert result.sector.tolist() == ["Information Technology", "Unclassified"]
+    assert result.loc[result.sector.eq("Information Technology"), "symbol"].tolist() == ["TCS.NS"]
+
+
 class Predictor:
     device = "fixture-only"
 

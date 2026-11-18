@@ -12154,7 +12154,7 @@ def render_kronos_forecast_tab() -> None:
         render_sector_forecast(
             PROJECT_ROOT, _cached_kronos_predictor,
             lambda result, history: _render_kronos_forecast_result(
-                result, history, chart_key="kronos-sector-chart"
+                result, history, chart_key=f"kronos-sector-chart-{result.symbol}"
             ),
         )
 

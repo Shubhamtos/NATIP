@@ -28,6 +28,37 @@ FNO_SOURCE = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
 INDEX_SYMBOLS = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"}
 
 
+def add_sector_metadata(root: Path, universe: pd.DataFrame) -> pd.DataFrame:
+    """Join known local sectors without fetching pages or guessing missing industries."""
+    from app.dashboard.nse_symbols import sector_for_symbol
+
+    mapping = {}
+    sources = [
+        ("config/screener_symbol_map.csv", "nse_ticker", "sector"),
+        ("stocks_universe_2026_08.csv", "Ticker", "Sector"),
+        ("stocks_universe_v5_smallcap250_2026_08_11.csv", "Ticker", "Sector"),
+    ]
+    for relative, ticker_col, sector_col in sources:
+        path = root / relative
+        if not path.exists():
+            continue
+        frame = pd.read_csv(path)
+        if not {ticker_col, sector_col} <= set(frame):
+            continue
+        for ticker, sector in frame[[ticker_col, sector_col]].dropna().itertuples(index=False):
+            label = str(sector).strip()
+            if label and label.casefold() not in {"unknown", "unclassified", "nan"}:
+                mapping.setdefault(normalize_nse_symbol(str(ticker)), label)
+    result = universe.copy()
+    result["sector"] = result.symbol.map(mapping)
+    missing = result.sector.isna()
+    result.loc[missing, "sector"] = result.loc[missing, "symbol"].map(
+        lambda ticker: sector_for_symbol(ticker.removesuffix(".NS"))
+    )
+    result["sector"] = result.sector.fillna("Unclassified").replace("Unknown", "Unclassified")
+    return result
+
+
 def load_fno_stocks(root: Path, *, refresh: bool = False) -> tuple[pd.DataFrame, str]:
     """Use the official market-lot list; isolate this cache from production references."""
     path = root / "data/kronos/fno_universe.csv"
@@ -164,6 +195,7 @@ def screen_job(
                 row = {
                     "Ticker": symbol,
                     "Company": job.parameters.get("companies", {}).get(symbol, symbol),
+                    "Sector": job.parameters.get("sectors", {}).get(symbol, "Unclassified"),
                     "Status": "FORECAST",
                     "Direction": result.direction,
                     "Signal Date": str(result.signal_date.date()),
@@ -178,8 +210,9 @@ def screen_job(
                     "Horizon": result.horizon,
                     "Paths": job.parameters["samples"],
                     "Generated At": result.generated_at.isoformat(),
-                    "Execution Check": (
-                        "Required: F&O ban, broker eligibility, spread and contract liquidity"
+                    "Execution Check": job.parameters.get(
+                        "execution_note",
+                        ("Required: F&O ban, broker eligibility, spread and contract liquidity"),
                     ),
                     "Reason": (
                         "Experimental daily forecast; not a calibrated probability "
@@ -207,7 +240,10 @@ def screen_job(
                     f"{job.status.title()}: {job.done}/{len(job.symbols)} stocks evaluated."
                 )
             rows = list(job.rows)
-        directory = root / "outputs/kronos_fno"
+        namespace = job.parameters.get("output_namespace", "kronos_fno")
+        if namespace not in {"kronos_fno", "kronos_sector_stocks"}:
+            namespace = "kronos_fno"
+        directory = root / "outputs" / namespace
         directory.mkdir(parents=True, exist_ok=True)
         temporary = directory / "latest.tmp"
         pd.DataFrame(rows).to_csv(temporary, index=False)
@@ -268,6 +304,17 @@ def render_kronos_fno_screener(
         st.error(str(exc))
         return
     st.caption(f"{len(universe)} F&O stock underlyings · {source}")
+    universe = add_sector_metadata(root, universe)
+    sector_options = ["All sectors", *sorted(universe.sector.unique())]
+    if st.session_state.get("kronos-fno-sector", "All sectors") not in sector_options:
+        st.session_state["kronos-fno-sector"] = "All sectors"
+    sector_filter = st.selectbox("Sector", sector_options, key="kronos-fno-sector")
+    if sector_filter != "All sectors":
+        universe = universe.loc[universe.sector.eq(sector_filter)].copy()
+    st.caption(
+        f"{len(universe)} F&O stocks in {sector_filter}. "
+        "Unclassified means no verified local sector mapping is available."
+    )
     selection = st.radio(
         "Scan universe",
         ["All F&O stocks", "Select F&O stocks"],
@@ -282,7 +329,7 @@ def render_kronos_fno_screener(
             "F&O companies",
             options,
             default=[s for s in ["RELIANCE.NS", "TCS.NS", "ICICIBANK.NS"] if s in options],
-            key="kronos-fno-symbols",
+            key=f"kronos-fno-symbols-{sector_filter}",
         )
     )
     count = st.number_input(
@@ -326,6 +373,8 @@ def render_kronos_fno_screener(
                     "samples": samples,
                     "min_turnover": liquidity,
                     "update": update,
+                    "sector_filter": sector_filter,
+                    "sectors": dict(zip(universe.symbol, universe.sector, strict=True)),
                     "universe_source": source,
                     "companies": dict(zip(universe.symbol, universe.company, strict=True)),
                 },
@@ -347,6 +396,10 @@ def render_kronos_fno_screener(
 def _render_results(root: Path, chart_renderer: Callable) -> None:
     job = jobs().jobs.get(st.session_state.get("kronos-fno-job", ""))
     if job:
+        scanned_sector = job.parameters.get("sector_filter", "All sectors")
+        st.caption(f"Results from scan: {scanned_sector}")
+        if scanned_sector != st.session_state.get("kronos-fno-sector", "All sectors"):
+            st.info("Sector filter changed. Run a new scan to replace the previous results.")
         with job.lock:
             rows, status, done, message = list(job.rows), job.status, job.done, job.message
         completion_key = st.session_state.get("kronos-fno-job")
