@@ -1,3 +1,5 @@
+# Streamlit Cloud deployment release: EMA-1.2.
+# Dependency specifiers unchanged; refresh the hosted process for this UI release.
 fastapi>=0.111.0
 streamlit>=1.36.0
 sqlalchemy>=2.0.0
